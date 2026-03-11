@@ -1,0 +1,181 @@
+{
+  "name": "debtcrasher",
+  "displayName": "Debtcrasher",
+  "description": "A VS Code development agent that preserves high-leverage architecture decisions as reusable learning notes.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "license": "Apache-2.0",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "debtcrasher.openAgentView",
+        "title": "Open Agent View"
+      },
+      {
+        "command": "debtcrasher.openStepView",
+        "title": "Open Step View"
+      },
+      {
+        "command": "debtcrasher.openBoth",
+        "title": "Open Debtcrasher"
+      },
+      {
+        "command": "debtcrasher.openSettings",
+        "title": "Open Debtcrasher Settings"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "debtcrasher",
+          "title": "Debtcrasher",
+          "icon": "media/sidebar-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "debtcrasher": [
+        {
+          "type": "webview",
+          "id": "debtcrasher.agentView",
+          "name": "Agent View",
+          "icon": "media/agent-icon.svg"
+        },
+        {
+          "type": "webview",
+          "id": "debtcrasher.stepView",
+          "name": "Step View",
+          "icon": "media/step-icon.svg"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Debtcrasher",
+      "properties": {
+        "debtcrasher.provider": {
+          "type": "string",
+          "enum": [
+            "anthropic",
+            "google",
+            "openai",
+            "deepseek"
+          ],
+          "default": "anthropic",
+          "markdownDescription": "?꾩옱 ?ъ슜??AI ?쒓났?먯엯?덈떎."
+        },
+        "aiStepDev.questionFilterLevel": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "default": "medium",
+          "enumDescriptions": [
+            "HIGH impact 질문만 묻습니다.",
+            "HIGH와 MEDIUM impact 질문만 묻습니다.",
+            "HIGH, MEDIUM, LOW impact 질문을 모두 허용합니다."
+          ],
+          "markdownDescription": "Agent View가 어떤 수준의 질문까지 사용자에게 직접 물을지 결정합니다."
+        },
+        "debtcrasher.anthropicApiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Anthropic Claude API ?ㅼ엯?덈떎."
+        },
+        "debtcrasher.anthropicModel": {
+          "type": "string",
+          "enum": [
+            "claude-sonnet-4-20250514",
+            "claude-opus-4-20250514",
+            "claude-3-7-sonnet-latest"
+          ],
+          "default": "claude-sonnet-4-20250514",
+          "enumDescriptions": [
+            "균형형 Claude 모델입니다.",
+            "더 강한 추론 쪽에 무게를 둔 Claude 모델입니다.",
+            "이전 Sonnet 계열과의 호환성을 남긴 선택지입니다."
+          ],
+          "markdownDescription": "Anthropic ?쒓났?먯뿉???ъ슜??紐⑤뜽 ?대쫫?낅땲??"
+        },
+        "debtcrasher.geminiApiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Google Gemini API ?ㅼ엯?덈떎."
+        },
+        "debtcrasher.geminiModel": {
+          "type": "string",
+          "enum": [
+            "gemini-2.5-flash",
+            "gemini-2.5-pro"
+          ],
+          "default": "gemini-2.5-flash",
+          "enumDescriptions": [
+            "속도와 비용 쪽에 무게를 둔 Gemini 모델입니다.",
+            "더 강한 추론 쪽에 무게를 둔 Gemini 모델입니다."
+          ],
+          "markdownDescription": "Google Gemini ?쒓났?먯뿉???ъ슜??紐⑤뜽 ?대쫫?낅땲??"
+        },
+        "debtcrasher.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "OpenAI API ?ㅼ엯?덈떎."
+        },
+        "debtcrasher.openaiModel": {
+          "type": "string",
+          "enum": [
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-4.1"
+          ],
+          "default": "gpt-5",
+          "enumDescriptions": [
+            "더 강한 추론 성능 쪽에 무게를 둔 모델입니다.",
+            "비용과 속도에 유리한 기본 경량 모델입니다.",
+            "호환성과 안정성 쪽에 무게를 둔 선택지입니다."
+          ],
+          "markdownDescription": "OpenAI ?쒓났?먯뿉???ъ슜??紐⑤뜽 ?대쫫?낅땲??"
+        },
+        "debtcrasher.deepseekApiKey": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "DeepSeek API ?ㅼ엯?덈떎."
+        },
+        "debtcrasher.deepseekModel": {
+          "type": "string",
+          "enum": [
+            "deepseek-chat",
+            "deepseek-reasoner"
+          ],
+          "default": "deepseek-chat",
+          "enumDescriptions": [
+            "일반 채팅/구현용 기본 모델입니다.",
+            "더 강한 추론 쪽에 무게를 둔 모델입니다."
+          ],
+          "markdownDescription": "DeepSeek ?쒓났?먯뿉???ъ슜??紐⑤뜽 ?대쫫?낅땲??"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.57",
+    "@types/vscode": "^1.95.0",
+    "typescript": "^5.8.3"
+  }
+}
+

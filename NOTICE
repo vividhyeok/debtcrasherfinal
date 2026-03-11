@@ -1,0 +1,13 @@
+Debtcrasher includes architecture and implementation patterns adapted from Continue.
+
+Upstream project:
+- Continue
+- Repository: https://github.com/continuedev/continue
+- License: Apache License 2.0
+
+Files and structures in this project were adapted from Continue's VS Code extension bootstrap and orchestration patterns, including concepts from:
+- extensions/vscode/src/activation/activate.ts
+- extensions/vscode/src/extension/VsCodeExtension.ts
+- extensions/vscode/src/ContinueGUIWebviewViewProvider.ts
+
+Debtcrasher adds its own decision-gate, step history, AGENT.md memory, and learning-note workflow on top of that base architecture.
