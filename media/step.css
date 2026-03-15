@@ -115,9 +115,12 @@ body.is-resizing {
   cursor: pointer;
 }
 
-.icon-button svg {
+.icon-button svg,
+.icon-button i {
   width: 16px;
   height: 16px;
+  font-size: 16px;
+  line-height: 1;
   fill: currentColor;
 }
 
@@ -142,6 +145,18 @@ body.is-resizing {
   padding: 9px 12px;
   background: rgba(255, 255, 255, 0.02);
   cursor: pointer;
+}
+
+.button-with-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.button-with-icon i {
+  font-size: 14px;
+  line-height: 1;
 }
 
 .primary-button[disabled] {
@@ -238,6 +253,7 @@ body.is-resizing {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
   padding: 10px;
 }
@@ -255,6 +271,7 @@ body.is-resizing {
 
 .step-list,
 .history-list {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -262,6 +279,7 @@ body.is-resizing {
 
 .step-item,
 .history-item {
+  min-width: 0;
   width: 100%;
   border: 1px solid var(--stroke);
   border-radius: var(--radius-md);
@@ -302,10 +320,13 @@ body.is-resizing {
   padding: 12px;
   cursor: pointer;
   text-align: left;
+  overflow: hidden;
 }
 
 .history-name,
 .history-time {
+  display: block;
+  width: 100%;
   min-width: 0;
   white-space: nowrap;
   overflow: hidden;
@@ -348,5 +369,10 @@ body.is-resizing {
   .history-item {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .history-name,
+  .history-time {
+    width: 100%;
   }
 }

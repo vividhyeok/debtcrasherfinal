@@ -31,7 +31,10 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
 
     webviewView.webview.options = {
       enableScripts: true,
-      localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')]
+      localResourceRoots: [
+        vscode.Uri.joinPath(this.context.extensionUri, 'media'),
+        vscode.Uri.joinPath(this.context.extensionUri, 'node_modules', '@vscode', 'codicons', 'dist')
+      ]
     };
     webviewView.webview.html = this.getHtml(webviewView.webview);
 
@@ -148,7 +151,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
   private async handleGenerateTutorial(entryIds: string[]): Promise<void> {
     try {
       if (entryIds.length === 0) {
-        throw new Error('최소 한 개 이상의 step을 선택해주세요.');
+        throw new Error('최소 한 개 이상의 step을 선택해 주세요.');
       }
 
       const entries = await this.logManager.readLogEntries();
@@ -160,7 +163,14 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
         throw new Error('선택한 step을 찾지 못했습니다.');
       }
 
-      const markdown = await this.aiClient.generateTutorial(selectedEntries);
+      const [projectGuideContent, lastImplementationSummary] = await Promise.all([
+        this.logManager.readAgentGuideContent(),
+        this.logManager.readLatestImplementationSummary()
+      ]);
+      const markdown = await this.aiClient.generateTutorial(selectedEntries, {
+        projectGuideContent,
+        lastImplementationSummary
+      });
       const title = buildTutorialTitle(selectedEntries);
       const tutorialUri = await this.logManager.saveTutorial(title, markdown);
 
@@ -207,17 +217,18 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
 
   private getHtml(webview: vscode.Webview): string {
     const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', 'step.css'));
+    const codiconCssUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'node_modules', '@vscode', 'codicons', 'dist', 'codicon.css')
+    );
     const nonce = createNonce();
-
-    const refreshIcon = `<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M13.4 3.7C12.2 2.4 10.4 1.6 8.5 1.6C5 1.6 2.1 4.5 2.1 8H0.8L2.9 10.1L5 8H3.5C3.5 5.3 5.8 3 8.5 3C9.9 3 11.2 3.6 12.1 4.5L13.4 3.7ZM15.2 8L13.1 5.9L11 8H12.5C12.5 10.7 10.2 13 7.5 13C6.1 13 4.8 12.4 3.9 11.5L2.6 12.3C3.8 13.6 5.6 14.4 7.5 14.4C11 14.4 13.9 11.5 13.9 8H15.2Z" fill="currentColor"/></svg>`;
-    const settingsIcon = `<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M9.5 1.5L10 3.1L11.6 3.6L10.8 5L11.2 6.6L9.7 6.1L8.3 6.6L8.7 5L7.9 3.6L9.5 3.1L9.5 1.5ZM4 8.3L4.9 9L5.2 10.1L6.3 10.5L7 11.4L6.1 12.3L5.2 11.6L4.1 11.3L3.7 10.2L2.9 9.5L4 8.3ZM12 8.3L13.1 9.5L12.3 10.2L11.9 11.3L10.8 11.6L9.9 12.3L9 11.4L9.7 10.5L10.8 10.1L11.1 9L12 8.3Z" fill="currentColor"/></svg>`;
 
     return `<!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; font-src ${webview.cspSource}; script-src 'nonce-${nonce}';">
+  <link rel="stylesheet" href="${codiconCssUri}">
   <link rel="stylesheet" href="${cssUri}">
   <title>Step View</title>
 </head>
@@ -227,11 +238,11 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
       <div class="toolbar-copy">
         <p class="kicker">Step View</p>
         <h1>Decision Archive</h1>
-        <p class="toolbar-subtitle">선택한 step을 판단 기록 문서로 저장하고, 기존 기록은 바로 편집기에서 다시 엽니다.</p>
+        <p class="toolbar-subtitle">선택한 step을 판단 기록 문서로 저장하고 기존 기록은 바로 편집기에서 다시 엽니다.</p>
       </div>
       <div class="toolbar-actions">
-        <button id="refreshButton" class="icon-button" title="Refresh">${refreshIcon}</button>
-        <button id="settingsButton" class="icon-button" title="Settings">${settingsIcon}</button>
+        <button id="refreshButton" class="icon-button" title="Refresh" aria-label="새로고침"><i class="codicon codicon-refresh"></i></button>
+        <button id="settingsButton" class="icon-button" title="Settings" aria-label="설정"><i class="codicon codicon-settings-gear"></i></button>
       </div>
     </header>
 
@@ -250,7 +261,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
             <span id="stepsMeta" class="header-meta">0개 선택</span>
             <button id="selectAllButton" class="secondary-button" type="button" data-no-drag="true">전체 선택</button>
             <button id="clearSelectionButton" class="secondary-button" type="button" data-no-drag="true" disabled>선택 해제</button>
-            <button id="generateButton" class="primary-button" type="button" data-no-drag="true" disabled>문서 생성</button>
+            <button id="generateButton" class="primary-button button-with-icon" type="button" data-no-drag="true" disabled><i class="codicon codicon-notebook"></i><span>문서 생성</span></button>
           </div>
         </div>
         <div id="stepsList" class="section-scroll step-list"></div>
@@ -347,7 +358,9 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
       const hasEntries = totalCount > 0;
       const allSelected = hasEntries && selectedCount === totalCount;
 
-      generateButton.textContent = state.isGenerating ? '생성 중...' : '문서 생성';
+      generateButton.innerHTML = state.isGenerating
+        ? '<i class="codicon codicon-loading codicon-modifier-spin"></i><span>생성 중...</span>'
+        : '<i class="codicon codicon-notebook"></i><span>문서 생성</span>';
       selectAllButton.textContent = allSelected ? '모두 선택됨' : '전체 선택';
 
       if (hasSelection && !state.isGenerating) {
@@ -483,7 +496,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
     }
 
     function beginResize(event) {
-      if (event.target.closest('[data-no-drag=\"true\"]')) {
+      if (event.target.closest('[data-no-drag="true"]')) {
         return;
       }
 
@@ -591,7 +604,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
         state.isGenerating = false;
         state.selectedIds.clear();
         renderSteps();
-        showStatus((message.count || 0) + '개의 step으로 판단 기록을 생성했고, 선택 내역을 초기화했습니다.');
+        showStatus((message.count || 0) + '개의 step으로 판단 기록 문서를 생성했고, 선택 내역을 초기화했습니다.');
         return;
       }
 

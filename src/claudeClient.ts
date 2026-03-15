@@ -3,5 +3,6 @@ export {
   type AIProvider,
   type DecisionHistoryEntry,
   type DecisionOption,
-  type DecisionResponse
+  type PlanningQuestion,
+  type PlanningResponse
 } from './aiClient';

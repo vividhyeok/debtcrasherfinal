@@ -4,7 +4,9 @@ import { AgentViewController } from '../agentView';
 import { AIClient } from '../aiClient';
 import { WorkspaceContextService } from '../context/WorkspaceContextService';
 import { LogManager } from '../logManager';
+import { SessionHistoryService } from '../sessionHistory';
 import { StepViewController } from '../stepView';
+import { VerificationService } from '../verification/VerificationService';
 import { AGENT_VIEW_ID, SIDEBAR_CONTAINER_ID, STEP_VIEW_ID } from '../viewIds';
 
 // Architectural structure adapted from Continue's VsCodeExtension orchestration.
@@ -15,6 +17,8 @@ export class DebtcrasherExtension implements vscode.Disposable {
   private readonly logManager: LogManager;
   private readonly aiClient: AIClient;
   private readonly workspaceContextService: WorkspaceContextService;
+  private readonly verificationService: VerificationService;
+  private readonly sessionHistoryService: SessionHistoryService;
   private readonly agentView: AgentViewController;
   private readonly stepView: StepViewController;
   private readonly statusBarItem: vscode.StatusBarItem;
@@ -24,11 +28,15 @@ export class DebtcrasherExtension implements vscode.Disposable {
     this.logManager = new LogManager();
     this.aiClient = new AIClient(context.secrets);
     this.workspaceContextService = new WorkspaceContextService();
+    this.verificationService = new VerificationService();
+    this.sessionHistoryService = new SessionHistoryService(() => this.logManager.getWorkspaceRootUri());
     this.agentView = new AgentViewController(
       context,
       this.aiClient,
       this.logManager,
-      this.workspaceContextService
+      this.workspaceContextService,
+      this.verificationService,
+      this.sessionHistoryService
     );
     this.stepView = new StepViewController(context, this.aiClient, this.logManager);
     this.statusBarItem = this.createStatusBarItem();
@@ -107,7 +115,7 @@ export class DebtcrasherExtension implements vscode.Disposable {
       vscode.commands.registerCommand('debtcrasher.openStepView', () => this.openStepView()),
       vscode.commands.registerCommand('debtcrasher.openBoth', () => this.openBoth()),
       vscode.commands.registerCommand('debtcrasher.openSettings', () =>
-        vscode.commands.executeCommand('workbench.action.openSettings', 'debtcrasher provider model aiStepDev.questionFilterLevel')
+        vscode.commands.executeCommand('workbench.action.openSettings', 'debtcrasher api key model aiStepDev.questionFilterLevel')
       )
     );
   }

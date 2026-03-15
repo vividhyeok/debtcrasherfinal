@@ -1,4 +1,4 @@
-import * as vscode from 'vscode';
+﻿import * as vscode from 'vscode';
 
 export interface DecisionLogEntry {
   id: string;
@@ -34,27 +34,65 @@ const GENERATED_SECTION_START = '<!-- DEBTCRASHER:START -->';
 const GENERATED_SECTION_END = '<!-- DEBTCRASHER:END -->';
 const GENERATED_COUNT_PREFIX = '<!-- DEBTCRASHER:COUNT=';
 const DECISIONS_FILE_NAME = 'DECISIONS.md';
+const PATTERN_GROUPS = [
+  {
+    label: 'simple-fast',
+    description: '간단함과 빠른 전달을 우선하는 경향',
+    keywords: ['simple', 'fast', 'minimal', 'quick', 'prototype', 'lean', '간단', '빠른', '최소', '프로토타입', '가볍게', '빨리']
+  },
+  {
+    label: 'local-static',
+    description: '로컬 또는 정적 구조를 우선하는 경향',
+    keywords: ['static', 'local', 'workspace', 'browser-only', 'file-based', 'offline', '정적', '로컬', '워크스페이스', '파일 기반', '백엔드 없음', '오프라인']
+  },
+  {
+    label: 'extensible',
+    description: '확장성과 유연성을 우선하는 경향',
+    keywords: ['extensible', 'scalable', 'modular', 'flexible', 'reusable', 'plugin', '확장', '유연', '모듈', '재사용', '스케일', '플러그인']
+  },
+  {
+    label: 'explicit-control',
+    description: '명시적인 사용자 통제를 우선하는 경향',
+    keywords: ['explicit', 'control', 'manual', 'direct', 'approval', 'decision gate', '명시', '직접', '수동', '사용자 선택', '판단', '승인']
+  },
+  {
+    label: 'performance-first',
+    description: '성능과 응답 속도를 우선하는 경향',
+    keywords: ['performance', 'latency', 'throughput', 'optimize', 'efficient', 'speed', '성능', '속도', '응답 속도', '지연', '최적화', '효율']
+  },
+  {
+    label: 'security-first',
+    description: '보안과 안전한 경계 설정을 우선하는 경향',
+    keywords: ['security', 'secure', 'auth', 'authentication', 'authorization', 'privacy', 'secret', 'encryption', '보안', '인증', '인가', '비밀키', '개인정보', '암호화']
+  },
+  {
+    label: 'ux-first',
+    description: '사용자 경험과 사용성을 우선하는 경향',
+    keywords: ['ux', 'user experience', 'usability', 'onboarding', 'clarity', 'accessible', 'interaction', '사용자 경험', '사용성', '온보딩', '명확성', '접근성', '인터랙션']
+  }
+] as const;
 
 const BASE_CONFIRMED_DECISIONS = [
-  'Product form: VS Code extension with one Activity Bar container and two sidebar views — the UI and commands are already built around Agent View + Step View.',
-  'Core agent behavior: mandatory decision gate before implementation — Debtcrasher exists to preserve explicit high-leverage judgment, not just auto-code.',
-  'First-turn protocol: non-trivial work starts with one high-leverage question — steps must come from explicit user choices only.',
-  'Decision memory: AGENT.md is the compressed cache and DECISIONS.md is the full log — agents should read the cache first and the full log only when needed.',
-  'Step output flow: selected steps become markdown files and open in the editor — learning material should live as normal workspace files.',
-  'History behavior: saved markdown opens directly in VS Code — there is no inline preview state in Step View.',
-  'Persistence model: project artifacts stay in the workspace filesystem — there is no backend, remote sync, or database layer by default.',
-  'Extension structure: Continue-inspired activation/orchestrator/workspace context layering — generic dev-agent plumbing is reused and Debtcrasher-specific behavior sits on top.'
+  'Product form: VS Code extension with one Activity Bar container and two sidebar views -- the UI and commands are centered around Agent View and Step View.',
+  'Core agent behavior: mandatory planning gate before implementation -- Debtcrasher exists to preserve explicit high-leverage judgment, not just auto-code.',
+  'Planning protocol: non-trivial work starts with one planning pass that surfaces up to 3 high-leverage questions at once -- implementation begins only after those answers are confirmed.',
+  'Decision memory: AGENT.md is the compressed cache and DECISIONS.md is the full log -- agents should read the cache first and the full log only when needed.',
+  'Step output flow: selected steps become markdown files and open in the editor -- learning material should live as normal workspace files.',
+  'History behavior: saved markdown opens directly in VS Code -- there is no inline preview state in Step View.',
+  'Persistence model: project artifacts stay in the workspace filesystem -- there is no backend, remote sync, or database layer by default.',
+  'Extension structure: Continue-inspired activation/orchestrator/workspace context layering -- generic dev-agent plumbing is reused and Debtcrasher-specific behavior sits on top.'
 ] as const;
 
 const IMPLIED_CONSTRAINTS = [
-  'Local workspace files only -> no auth, no remote storage, no server-side coordination unless the user explicitly introduces a backend.',
-  'Mandatory decision gate + explicit step recording -> no inferred steps, no autonomous first-turn implementation, and no replay of already answered topics.',
+  'Local workspace files only -> no auth, no remote storage, and no server-side coordination unless the user explicitly introduces a backend.',
+  'Mandatory planning gate + explicit step recording -> no autonomous implementation before surfaced questions are answered, no inferred steps, and no replay of already answered topics.',
   'File-based tutorial history + editor-open flow -> markdown review and editing happen in VS Code, not inside Step View.'
 ] as const;
 
 const STATIC_DO_NOT_ASK_AGAIN = [
   'AGENT.md vs DECISIONS.md memory structure',
-  'Whether the first non-trivial turn must ask a high-leverage question',
+  'Whether planning happens before implementation',
+  'Whether questions are asked one at a time or in one planning batch',
   'Whether steps can be inferred without an explicit user answer',
   'Whether Step View should show inline markdown preview',
   'Whether history should open files directly in the editor',
@@ -86,10 +124,18 @@ export class LogManager {
   }
 
   public async appendDecision(entry: DecisionLogEntryInput): Promise<void> {
+    await this.appendDecisions([entry]);
+  }
+
+  public async appendDecisions(entries: DecisionLogEntryInput[]): Promise<void> {
+    if (entries.length === 0) {
+      return;
+    }
+
     const logUri = await this.ensureLogFile();
     const current = await this.readTextFile(logUri);
-    const nextBlock = this.renderLogBlock(entry);
-    const nextContent = current.trim().length > 0 ? `${current.trimEnd()}\n\n${nextBlock}\n` : `${nextBlock}\n`;
+    const nextBlocks = entries.map((entry) => this.renderLogBlock(entry)).join('\n\n');
+    const nextContent = current.trim().length > 0 ? `${current.trimEnd()}\n\n${nextBlocks}\n` : `${nextBlocks}\n`;
     await this.writeTextFile(logUri, nextContent);
   }
 
@@ -161,6 +207,81 @@ export class LogManager {
     return sections.join('\n\n');
   }
 
+  public async readAgentGuideContent(): Promise<string> {
+    const workspaceRoot = this.getWorkspaceRootUri();
+    if (!workspaceRoot) {
+      return '';
+    }
+
+    const uri = vscode.Uri.joinPath(workspaceRoot, 'AGENT.md');
+    try {
+      const content = await this.readTextFile(uri);
+      return content.trim().slice(0, 8000);
+    } catch {
+      return '';
+    }
+  }
+
+  public async readLatestImplementationSummary(): Promise<string> {
+    const guideContent = await this.readAgentGuideContent();
+    if (!guideContent) {
+      return '';
+    }
+
+    const encoded = guideContent.match(/<!-- DEBTCRASHER:BUILD_SUMMARY=([^\n>]*) -->/)?.[1];
+    const summary = collapseLine(decodeGuideMeta(encoded));
+    return summary === '아직 구현 요약이 없습니다.' ? '' : summary;
+  }
+
+  public async readDecisionPatternContext(task: string): Promise<string> {
+    const entries = await this.readLogEntries();
+    if (entries.length === 0) {
+      return '';
+    }
+
+    const taskTokens = tokenizeForPatterns(task);
+    const similarEntries = entries
+      .map((entry) => ({
+        entry,
+        score: computeSimilarityScore(
+          taskTokens,
+          tokenizeForPatterns(`${entry.title} ${entry.question} ${entry.userChoice} ${entry.outcome}`)
+        )
+      }))
+      .filter((item) => item.score > 0)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 3)
+      .map((item) => `- ${item.entry.title}: ${extractChoiceLabel(pickChosenSummary(item.entry), item.entry.userChoice)}`);
+
+    const repeatedPriorities = PATTERN_GROUPS
+      .map((group) => ({
+        description: group.description,
+        score: entries.reduce(
+          (total, entry) => total + scorePatternGroup(group.keywords, `${entry.userChoice} ${entry.outcome} ${entry.question}`),
+          0
+        )
+      }))
+      .filter((group) => group.score > 0)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 3)
+      .map((group) => `${group.description} (${group.score})`);
+
+    if (similarEntries.length === 0 && repeatedPriorities.length === 0) {
+      return '';
+    }
+
+    return [
+      'Historical decision patterns:',
+      repeatedPriorities.length > 0
+        ? `- Repeated priorities: ${repeatedPriorities.join(', ')}`
+        : '- Repeated priorities: none strong enough yet',
+      similarEntries.length > 0
+        ? ['- Similar past decisions:', ...similarEntries].join('\n')
+        : '- Similar past decisions: none close enough',
+      '- Use these patterns only as a ranking bias. Never override the current request.'
+    ].join('\n');
+  }
+
   public async syncProjectGuide(latestTask?: string, latestSummary?: string): Promise<vscode.Uri | undefined> {
     const workspaceRoot = this.getWorkspaceRootUri();
     if (!workspaceRoot) {
@@ -169,6 +290,7 @@ export class LogManager {
 
     const entries = await this.readLogEntries();
     const targetUri = await this.resolveGuideTargetUri();
+    const decisionsUri = vscode.Uri.joinPath(workspaceRoot, DECISIONS_FILE_NAME);
     let existing = '';
 
     try {
@@ -177,11 +299,53 @@ export class LogManager {
       existing = '';
     }
 
-    if (!shouldRegenerateGuide(existing, entries)) {
+    const decodeMeta = (value?: string): string => {
+      if (!value) {
+        return '';
+      }
+      try {
+        return decodeURIComponent(value);
+      } catch {
+        return value;
+      }
+    };
+
+    const readStat = async (uri: vscode.Uri): Promise<vscode.FileStat | undefined> => {
+      try {
+        return await vscode.workspace.fs.stat(uri);
+      } catch {
+        return undefined;
+      }
+    };
+
+    const guideStat = await readStat(targetUri);
+    const decisionsStat = await readStat(decisionsUri);
+    const cachedCount = Number(existing.match(/<!-- DEBTCRASHER:COUNT=(\d+) -->/)?.[1] ?? '-1');
+    const storedLatestDecision = decodeMeta(existing.match(/<!-- DEBTCRASHER:LATEST_DECISION=([^\n>]*) -->/)?.[1]);
+    const storedBuildSummary = decodeMeta(existing.match(/<!-- DEBTCRASHER:BUILD_SUMMARY=([^\n>]*) -->/)?.[1]);
+    const storedTaskContext = decodeMeta(existing.match(/<!-- DEBTCRASHER:LATEST_TASK=([^\n>]*) -->/)?.[1]);
+
+    const latestDecisionSummary = entries[0]
+      ? summarizeLoggedDecision(entries[0]).replace(' -- ', ' — ')
+      : '';
+    const effectiveTask = latestTask?.trim()
+      ? collapseLine(latestTask)
+      : storedTaskContext || '최근 요청 컨텍스트 없음.';
+    const effectiveSummary = latestSummary?.trim()
+      ? collapseLine(latestSummary)
+      : storedBuildSummary || latestDecisionSummary || '아직 구현 요약이 없습니다.';
+
+    const decisionCountChanged = cachedCount !== entries.length;
+    const decisionsFileIsNewer = Boolean(decisionsStat && (!guideStat || decisionsStat.mtime > guideStat.mtime));
+    const latestDecisionChanged = storedLatestDecision !== latestDecisionSummary;
+    const buildSummaryChanged = storedBuildSummary !== effectiveSummary;
+    const taskContextChanged = storedTaskContext !== effectiveTask;
+
+    if (!(decisionCountChanged || decisionsFileIsNewer || latestDecisionChanged || buildSummaryChanged || taskContextChanged)) {
       return targetUri;
     }
 
-    const generated = renderProjectGuide(entries, latestTask, latestSummary);
+    const generated = renderProjectGuide(entries, effectiveTask, effectiveSummary);
     await this.writeTextFile(targetUri, upsertGeneratedGuideSection(existing, generated));
     return targetUri;
   }
@@ -209,8 +373,7 @@ export class LogManager {
       throw new Error('워크스페이스 폴더를 먼저 열어 주세요.');
     }
 
-    const guideUri = vscode.Uri.joinPath(workspaceRoot, 'AGENT.md');
-    return guideUri;
+    return vscode.Uri.joinPath(workspaceRoot, 'AGENT.md');
   }
 
   private renderLogBlock(entry: DecisionLogEntryInput): string {
@@ -226,9 +389,16 @@ export class LogManager {
   }
 
   private parseLogEntries(content: string): DecisionLogEntry[] {
-    const sections = content.split(/(?=^## Step:\s+)/gm).map((section) => section.trim()).filter(Boolean);
+    const sections = content
+      .split(/(?=^## Step:\s+)/gm)
+      .map((section) => section.trim())
+      .filter(Boolean);
+
     const entries = sections.map((section) => ({
-      id: Buffer.from(`${extractField(section, /^## Step:\s*(.+)$/m)}::${extractField(section, /^\*\*Date\*\*:\s*(.+)$/m)}`, 'utf8').toString('base64url'),
+      id: Buffer.from(
+        `${extractField(section, /^## Step:\s*(.+)$/m)}::${extractField(section, /^\*\*Date\*\*:\s*(.+)$/m)}`,
+        'utf8'
+      ).toString('base64url'),
       title: extractField(section, /^## Step:\s*(.+)$/m),
       date: extractField(section, /^\*\*Date\*\*:\s*(.+)$/m),
       question: extractField(section, /^\*\*Question\*\*:\s*(.+)$/m),
@@ -250,6 +420,18 @@ function collapseLine(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+function decodeGuideMeta(value?: string): string {
+  if (!value) {
+    return '';
+  }
+
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 function sanitizeFileName(title: string): string {
   const stripped = title.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '').replace(/\.+$/g, '').trim();
   return stripped.length > 0 ? stripped.slice(0, 80) : 'tutorial';
@@ -269,43 +451,50 @@ function shouldRegenerateGuide(existing: string, entries: DecisionLogEntry[]): b
 
 function renderProjectGuide(entries: DecisionLogEntry[], latestTask?: string, latestSummary?: string): string {
   const dynamicTopics = entries.map((entry) => entry.title);
-  const doNotAskAgain = Array.from(new Set([...STATIC_DO_NOT_ASK_AGAIN, ...dynamicTopics])).sort((left, right) => left.localeCompare(right));
-  const confirmedLines = entries.length === 0
-    ? ['- Logged user decisions: none yet.']
-    : entries.map((entry) => `- ${summarizeLoggedDecision(entry)}`);
-  const undecidedLines = [
-    latestTask?.trim()
-      ? `- Current request-specific architecture beyond the confirmed defaults: ${collapseLine(latestTask)}.`
-      : '- The exact architecture for the next task remains request-specific.',
-    '- AI provider and model remain configurable by the user in VS Code settings.',
-    latestSummary?.trim()
-      ? `- Latest implementation summary reference: ${collapseLine(latestSummary)}.`
-      : undefined
-  ].filter((line): line is string => Boolean(line));
+  const doNotAskAgain = Array.from(new Set([...STATIC_DO_NOT_ASK_AGAIN, ...dynamicTopics])).sort((left, right) =>
+    left.localeCompare(right)
+  );
+  const latestDecisionSummary = entries.length > 0
+    ? summarizeLoggedDecision(entries[0]).replace(' -- ', ' — ')
+    : '';
+  const confirmedLines =
+    entries.length === 0
+      ? ['- Logged user decisions: none yet.']
+      : entries.map((entry) => `- ${summarizeLoggedDecision(entry).replace(' -- ', ' — ')}`);
+  const confirmedDefaults = BASE_CONFIRMED_DECISIONS.map((line) => `- ${line.replace(' -- ', ' — ')}`);
+  const normalizedTask = latestTask?.trim() ? collapseLine(latestTask) : '최근 요청 컨텍스트 없음.';
+  const normalizedSummary = latestSummary?.trim()
+    ? collapseLine(latestSummary)
+    : latestDecisionSummary || '아직 구현 요약이 없습니다.';
 
   return [
     GENERATED_SECTION_START,
     `${GENERATED_COUNT_PREFIX}${entries.length} -->`,
+    `<!-- DEBTCRASHER:LATEST_DECISION=${encodeURIComponent(latestDecisionSummary)} -->`,
+    `<!-- DEBTCRASHER:BUILD_SUMMARY=${encodeURIComponent(normalizedSummary)} -->`,
+    `<!-- DEBTCRASHER:LATEST_TASK=${encodeURIComponent(normalizedTask)} -->`,
     '## Agent Behavior Rules',
     '- Before asking ANY question, read this file in full',
     '- If the answer can be inferred from confirmed decisions or implied constraints, do not ask - implement with that inference',
-    '- Maximum 2 questions per user request. If more seem possible, keep only the most architecturally significant ones',
+    '- For a new task, plan first and surface at most 3 architecturally significant questions at once',
+    '- After the surfaced planning questions are answered, begin implementation immediately and do not ask more questions',
     '- If a decision is listed in "Do not ask again", treat it as immutable and never surface it again',
     '- When implementing, add a one-line comment for any default assumption you made without asking: // ASSUMPTION: [what and why]',
-    '- This file is regenerated every 5 confirmed decisions. Do not treat it as a log - treat it as ground truth for this project',
+    '- This file is regenerated from the current decision state. Do not treat it as a log - treat it as ground truth for this project',
     '- The full decision history is in DECISIONS.md - read it only when this file is not enough',
     '',
     '# Debtcrasher Cache',
     '',
     '## Confirmed Decisions',
-    ...BASE_CONFIRMED_DECISIONS.map((line) => `- ${line}`),
+    ...confirmedDefaults,
     ...confirmedLines,
     '',
     '## Implied Constraints',
     ...IMPLIED_CONSTRAINTS.map((line) => `- ${line}`),
     '',
-    '## Still Undecided',
-    ...undecidedLines,
+    '## Most Recent Context',
+    `- Request: ${normalizedTask}`,
+    `- Last built feature: ${normalizedSummary}`,
     '',
     '## Do not ask again',
     ...doNotAskAgain.map((line) => `- ${line}`),
@@ -317,7 +506,7 @@ function summarizeLoggedDecision(entry: DecisionLogEntry): string {
   const chosenSummary = pickChosenSummary(entry);
   const chosenLabel = extractChoiceLabel(chosenSummary, entry.userChoice);
   const reason = extractReason(chosenSummary) || collapseLine(entry.outcome) || collapseLine(entry.question);
-  return `${entry.title}: ${chosenLabel} — ${reason}`;
+  return `${entry.title}: ${chosenLabel} -- ${reason}`;
 }
 
 function pickChosenSummary(entry: DecisionLogEntry): string {
@@ -332,7 +521,10 @@ function pickChosenSummary(entry: DecisionLogEntry): string {
 
 function extractChoiceLabel(summary: string, fallback: string): string {
   const head = summary.split('|')[0]?.trim() ?? '';
-  const normalized = head.replace(/^Option\s+[AB]\s*-\s*/i, '').replace(/^[AB]\s*-\s*/i, '').trim();
+  const normalized = head
+    .replace(/^Option\s+[AB]\s*-\s*/i, '')
+    .replace(/^[AB]\s*-\s*/i, '')
+    .trim();
   return normalized || fallback;
 }
 
@@ -341,9 +533,38 @@ function extractReason(summary: string): string {
   return prosMatch?.[1]?.split(',').map((value) => value.trim()).find(Boolean) ?? '';
 }
 
+function tokenizeForPatterns(input: string): string[] {
+  const matches = input.toLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? [];
+  return Array.from(
+    new Set(
+      matches
+        .flatMap((token) => token.split(/[._-]+/g))
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 2)
+    )
+  );
+}
+
+function computeSimilarityScore(taskTokens: string[], entryTokens: string[]): number {
+  if (taskTokens.length === 0 || entryTokens.length === 0) {
+    return 0;
+  }
+
+  const entrySet = new Set(entryTokens);
+  return taskTokens.reduce((score, token) => score + (entrySet.has(token) ? 2 : 0), 0);
+}
+
+function scorePatternGroup(keywords: readonly string[], text: string): number {
+  const normalized = text.toLowerCase();
+  return keywords.reduce((score, keyword) => score + (normalized.includes(keyword.toLowerCase()) ? 1 : 0), 0);
+}
+
 function upsertGeneratedGuideSection(existing: string, generated: string): string {
   const trimmed = existing.trim();
-  const pattern = new RegExp(`${escapeRegExp(GENERATED_SECTION_START)}[\\s\\S]*?${escapeRegExp(GENERATED_SECTION_END)}`, 'm');
+  const pattern = new RegExp(
+    `${escapeRegExp(GENERATED_SECTION_START)}[\\s\\S]*?${escapeRegExp(GENERATED_SECTION_END)}`,
+    'm'
+  );
   if (!trimmed) {
     return `${generated}\n`;
   }
@@ -356,3 +577,4 @@ function upsertGeneratedGuideSection(existing: string, generated: string): strin
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
