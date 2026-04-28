@@ -247,18 +247,15 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
   <div class="app-shell">
     <header class="toolbar">
       <div class="toolbar-copy">
-        <p class="kicker">Step View</p>
-        <h1>Decision Archive</h1>
-        <p class="toolbar-subtitle">선택한 step을 판단 기록 문서로 저장하고 기존 기록은 바로 편집기에서 다시 엽니다.</p>
+        <span id="modeNotice" class="mode-banner"></span>
       </div>
       <div class="toolbar-actions">
-        <button id="refreshButton" class="icon-button" title="Refresh" aria-label="새로고침"><i class="codicon codicon-refresh"></i></button>
-        <button id="settingsButton" class="icon-button" title="Settings" aria-label="설정"><i class="codicon codicon-settings-gear"></i></button>
+        <button id="refreshButton" class="icon-button" title="목록 새로고침" aria-label="목록 새로고침"><i class="codicon codicon-refresh"></i></button>
+        <button id="settingsButton" class="icon-button" title="설정 열기" aria-label="설정 열기"><i class="codicon codicon-settings-gear"></i></button>
       </div>
     </header>
 
-    <div id="workspaceNotice" class="notice hidden">워크스페이스를 열어야 step 로그와 저장된 markdown 기록을 사용할 수 있습니다.</div>
-    <div id="modeNotice" class="notice"></div>
+    <div id="workspaceNotice" class="notice hidden">워크스페이스를 열어 주세요.</div>
     <div id="statusBanner" class="status-banner hidden"></div>
     <div id="errorBanner" class="error-banner hidden"></div>
 
@@ -266,26 +263,24 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
       <section id="stepsSection" class="split-section top-section" style="flex-basis: 58%;">
         <div id="stepsHeader" class="section-header resize-handle">
           <div class="header-copy">
-            <p class="section-label">Decision Steps</p>
-            <h2>기록된 step</h2>
+            <p class="section-label">Steps</p>
           </div>
           <div class="header-actions">
             <span id="stepsMeta" class="header-meta">0개 선택</span>
-            <button id="selectAllButton" class="secondary-button" type="button" data-no-drag="true">전체 선택</button>
-            <button id="clearSelectionButton" class="secondary-button" type="button" data-no-drag="true" disabled>선택 해제</button>
-            <button id="generateButton" class="primary-button button-with-icon" type="button" data-no-drag="true" disabled><i class="codicon codicon-notebook"></i><span>문서 생성</span></button>
+            <button id="selectAllButton" class="icon-button action-icon-button" type="button" data-no-drag="true" title="전체 선택" aria-label="전체 선택"><i class="codicon codicon-check-all"></i></button>
+            <button id="clearSelectionButton" class="icon-button action-icon-button" type="button" data-no-drag="true" title="선택 해제" aria-label="선택 해제" disabled><i class="codicon codicon-clear-all"></i></button>
+            <button id="generateButton" class="icon-button action-icon-button action-icon-primary" type="button" data-no-drag="true" title="선택한 step으로 문서를 생성합니다" aria-label="문서 생성" disabled><i class="codicon codicon-notebook"></i></button>
           </div>
         </div>
         <div id="stepsList" class="section-scroll step-list"></div>
       </section>
 
-      <div id="splitDivider" class="split-divider" role="separator" aria-orientation="horizontal" aria-label="Resize step and history panels"></div>
+      <div id="splitDivider" class="split-divider" role="separator" aria-orientation="horizontal" aria-label="Resize panels"></div>
 
       <section id="historySection" class="split-section bottom-section">
         <div id="historyHeader" class="section-header resize-handle">
           <div class="header-copy">
             <p class="section-label">History</p>
-            <h2>저장된 markdown</h2>
           </div>
           <div class="header-actions">
             <span id="historyMeta" class="header-meta">0개 파일</span>
@@ -373,9 +368,12 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
       const allSelected = hasEntries && selectedCount === totalCount;
 
       generateButton.innerHTML = state.isGenerating
-        ? '<i class="codicon codicon-loading codicon-modifier-spin"></i><span>생성 중...</span>'
-        : '<i class="codicon codicon-notebook"></i><span>문서 생성</span>';
-      selectAllButton.textContent = allSelected ? '모두 선택됨' : '전체 선택';
+        ? '<i class="codicon codicon-loading codicon-modifier-spin"></i>'
+        : '<i class="codicon codicon-notebook"></i>';
+      generateButton.title = state.isGenerating ? '문서 생성 중' : '선택한 step 문서 생성';
+      generateButton.setAttribute('aria-label', state.isGenerating ? '문서 생성 중' : '선택한 step 문서 생성');
+      selectAllButton.title = allSelected ? '모두 선택됨' : '전체 선택';
+      selectAllButton.setAttribute('aria-label', allSelected ? '모두 선택됨' : '전체 선택');
 
       if (hasSelection && !state.isGenerating) {
         generateButton.removeAttribute('disabled');
@@ -399,8 +397,8 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
     function updateMeta() {
       const selectedCount = state.selectedIds.size;
       const totalCount = state.entries.length;
-      stepsMeta.textContent = selectedCount + ' / ' + totalCount + '개 선택';
-      historyMeta.textContent = state.history.length + '개 파일';
+      stepsMeta.textContent = '선택 ' + selectedCount + ' · 전체 ' + totalCount;
+      historyMeta.textContent = '저장 ' + state.history.length;
       updateButtons();
     }
 
@@ -522,7 +520,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
     function selectAllSteps() {
       state.entries.forEach((entry) => state.selectedIds.add(entry.id));
       renderSteps();
-      showStatus('현재 보이는 step을 모두 선택했습니다.');
+      showStatus('모든 step을 선택했습니다.');
     }
 
     function clearSelection() {
@@ -532,7 +530,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
 
       state.selectedIds.clear();
       renderSteps();
-      showStatus('선택한 step을 모두 해제했습니다.');
+      showStatus('선택을 해제했습니다.');
     }
 
     window.addEventListener('mousemove', (event) => {
@@ -607,7 +605,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
         clearError();
         workspaceNotice.classList.toggle('hidden', message.hasWorkspace);
         state.traceabilityMode = message.traceabilityMode || 'basic';
-        modeNotice.textContent = 'Mode: ' + (state.traceabilityMode === 'strict' ? 'Strict' : 'Basic') + ' — Strict mode is slower but provides stronger traceability checks.';
+        modeNotice.textContent = '추적성 · ' + (state.traceabilityMode === 'strict' ? 'Strict' : 'Basic');
         state.entries = message.entries || [];
         state.history = message.history || [];
         renderSteps();
@@ -621,9 +619,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
         state.selectedIds.clear();
         renderSteps();
         const finalStatus = message.validation && message.validation.final_status ? message.validation.final_status : 'generated';
-        showStatus((message.count || 0) + '개 step으로 판단 기록 문서를 생성했습니다. 검증 상태: ' + finalStatus);
-        return;
-        showStatus((message.count || 0) + '개의 step으로 판단 기록 문서를 생성했고, 선택 내역을 초기화했습니다.');
+        showStatus((message.count || 0) + '개 step 문서 생성 · 검증 ' + finalStatus);
         return;
       }
 

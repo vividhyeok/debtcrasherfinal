@@ -1,4 +1,4 @@
-﻿import * as vscode from 'vscode';
+import * as vscode from 'vscode';
 
 import {
   AIClient,
@@ -1097,14 +1097,11 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       vscode.Uri.joinPath(this.context.extensionUri, 'node_modules', '@vscode', 'codicons', 'dist', 'codicon.css')
     );
     const nonce = createNonce();
-    const planeIcon = `<svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg"><path d="M2 2L14 8L2 14L4.6 8L2 2Z" fill="currentColor"/></svg>`;
     const initialThreadHtml = [
       '<article class="message message-assistant">',
       '  <div class="message-role">Agent</div>',
       '  <div class="bubble system-bubble">',
-      '    <p class="system-title">기본 흐름</p>',
-      '    <p>먼저 planning 단계에서 필요한 판단을 한 번에 정리하고, 사용자가 그 판단을 모두 확정하면 바로 구현 단계로 넘어갑니다.</p>',
-      '    <p>Debtcrasher는 고레버리지 판단을 DECISIONS.md와 AGENT.md에 남겨 이후 작업과 학습 자료로 다시 활용합니다.</p>',
+      '    <p>요청을 입력하면 핵심 판단 확인 후 바로 구현을 진행합니다.</p>',
       '  </div>',
       '</article>'
     ].join('');
@@ -1123,20 +1120,15 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
   <div class="app-shell">
     <header class="topbar">
       <div class="topbar-copy">
-        <p class="kicker">Agent View</p>
-        <h1>Development Agent</h1>
-        <p id="environmentMeta" class="topbar-subtitle">환경 정보를 불러오는 중입니다.</p>
+        <p id="environmentMeta" class="topbar-subtitle">환경 확인 중...</p>
       </div>
       <div class="topbar-actions">
-        <button id="demoSeedBtn" class="icon-button" title="Demo Seed" aria-label="Demo Seed"><i class="codicon codicon-beaker"></i></button>
-        <button id="newSessionBtn" class="icon-button" title="새 세션" aria-label="새 세션"><i class="codicon codicon-add"></i></button>
+        <button id="chatModeBtn" class="icon-button is-active" type="button" title="채팅" aria-label="채팅" aria-selected="true" role="tab"><i class="codicon codicon-comment-discussion"></i></button>
+        <button id="historyModeBtn" class="icon-button" type="button" title="작업 기록" aria-label="작업 기록" aria-selected="false" role="tab"><i class="codicon codicon-history"></i></button>
+        <button id="demoSeedBtn" class="icon-button" title="데모 시나리오 실행" aria-label="데모 시나리오 실행"><i class="codicon codicon-beaker"></i></button>
+        <button id="newSessionBtn" class="icon-button" title="새 세션 시작" aria-label="새 세션 시작"><i class="codicon codicon-add"></i></button>
       </div>
     </header>
-
-    <div class="mode-toggle" role="tablist" aria-label="Agent View 모드">
-      <button id="chatModeBtn" class="mode-toggle-button is-active" type="button" aria-selected="true" aria-label="새 채팅" title="새 채팅"><i class="codicon codicon-add"></i></button>
-      <button id="historyModeBtn" class="mode-toggle-button" type="button" aria-selected="false" aria-label="작업 기록" title="작업 기록"><i class="codicon codicon-history"></i></button>
-    </div>
 
     <div id="restoreBanner" class="restore-banner is-hidden" aria-live="polite">이전 세션을 불러왔습니다.</div>
 
@@ -1144,10 +1136,9 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       <main id="thread" class="thread" aria-live="polite">${initialThreadHtml}</main>
 
       <form id="inputForm" class="composer">
-        <label for="userInput" class="composer-label">개발 요청</label>
-        <textarea id="userInput" class="input-box" rows="4" placeholder="예: React + Vite + TypeScript로 빠르게 프로토타입을 만들고 싶어. 구조는 단순하게 가고 구현은 바로 시작해도 돼."></textarea>
+        <textarea id="userInput" class="input-box" rows="3" placeholder="작업 요청을 입력하세요..."></textarea>
         <div class="composer-footer">
-          <button type="submit" id="sendBtn" class="send-btn" title="전송">${planeIcon}</button>
+          <button type="submit" id="sendBtn" class="icon-button" title="전송 (Enter)" aria-label="전송"><i class="codicon codicon-send"></i></button>
         </div>
       </form>
     </section>
@@ -1155,7 +1146,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     <section id="historyPane" class="pane pane-history is-hidden">
       <div id="historyList" class="history-list" aria-label="작업 기록 목록"></div>
       <div id="historyDetail" class="history-detail">
-        <p class="empty-line">저장된 작업 기록을 선택해 주세요.</p>
+        <p class="empty-line">기록을 선택하면 상세 내역을 볼 수 있습니다.</p>
       </div>
     </section>
   </div>
@@ -1264,7 +1255,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     function updateEnvironmentMeta(provider, hasWorkspace, traceabilityMode) {
       if (!provider) return;
       const modeLabel = traceabilityMode === 'strict' ? 'Strict' : 'Basic';
-      environmentMeta.textContent = provider.displayName + ' ' + provider.model + ' / 워크스페이스 ' + (hasWorkspace ? '연결됨' : '없음') + ' / Mode: ' + modeLabel + ' — Strict mode is slower but provides stronger traceability checks.';
+      environmentMeta.textContent = provider.displayName + ' ' + provider.model + ' · 워크스페이스 ' + (hasWorkspace ? '연결됨' : '없음') + ' · ' + modeLabel;
     }
 
     function setPhase(requestId, phase) {
@@ -1485,9 +1476,9 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
           + '</ul>'
         : '';
       const retryButtonHtml = message.manualVerificationAvailable
-        ? '<div class="verification-actions"><button type="button" class="secondary-button retry-verification-button button-with-icon"'
+        ? '<div class="verification-actions"><button type="button" class="secondary-button retry-verification-button button-with-icon" title="수동으로 코드를 수정한 뒤 검증 명령을 다시 실행합니다"'
           + (readOnly ? ' disabled' : ' data-request-id="' + escapeHtml(message.requestId || '') + '"')
-          + '>' + codicon('refresh') + '<span>수동 수정 후 재검증</span></button></div>'
+          + '>' + codicon('debug-restart') + '<span>재검증</span></button></div>'
         : '';
 
       return '<div class="result-block"><p class="tradeoff-title">자동 검증</p>'
@@ -1663,7 +1654,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
         '</div>',
         assumptionsHtml,
         renderQuestions(plan),
-        '<div class="decision-actions"><button type="button" class="confirm-button start-build-button button-with-icon"' + ((plan.questions || []).length > 0 ? ' disabled' : '') + '>' + codicon('play') + '<span>개발 시작</span></button></div>'
+        '<div class="decision-actions"><button type="button" class="confirm-button start-build-button button-with-icon" title="확정한 판단을 기준으로 구현을 시작합니다"' + ((plan.questions || []).length > 0 ? ' disabled' : '') + '>' + codicon('play') + '<span>시작</span></button></div>'
       ].join('');
 
       const message = appendMessage('Agent', 'message-assistant planning-message', planHtml);
@@ -1921,7 +1912,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
         '  <p class="history-detail-meta">' + escapeHtml(formatDateTime(session.startedAt)) + '</p>',
         '</div>',
         '<div id="historyThread" class="thread history-thread" aria-live="off"></div>',
-        '<div class="history-actions"><button id="resumeSessionBtn" type="button" class="confirm-button button-with-icon">' + codicon('debug-continue') + '<span>이 세션 이어서 개발</span></button></div>'
+        '<div class="history-actions"><button id="resumeSessionBtn" type="button" class="confirm-button button-with-icon" title="이 세션의 맥락을 유지한 채로 추가 작업을 진행합니다">' + codicon('debug-continue') + '<span>이어서</span></button></div>'
       ].join('');
 
       const historyThread = document.getElementById('historyThread');
