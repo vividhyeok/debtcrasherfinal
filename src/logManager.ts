@@ -1,24 +1,66 @@
 ﻿import * as vscode from 'vscode';
 
+import type { HumanReviewLevel, PlanningAssumption, RiskCategory } from './aiClient';
+
 export interface DecisionLogEntry {
   id: string;
   title: string;
   date: string;
   question: string;
+  options: string[];
   optionA: string;
   optionB: string;
   userChoice: string;
   outcome: string;
+  reason: string;
+  humanReviewLevel?: HumanReviewLevel;
+  reviewCategories?: string[];
+  aiReasonForReview?: string;
+  leverageScore: number | undefined;
+  riskCategories: RiskCategory[];
+  defaultIfSkipped: string;
+  riskIfWrong: string;
+  relatedFiles: string[];
+  canAutoApply?: boolean;
+  assumptionLog?: PlanningAssumption[];
+  validationResult?: DecisionValidationResult;
+  source: DecisionSource[];
 }
 
 export interface DecisionLogEntryInput {
+  id?: string;
   title: string;
   date: string;
   question: string;
+  options?: string[];
   optionA: string;
   optionB: string;
   userChoice: string;
   outcome: string;
+  reason?: string;
+  humanReviewLevel?: HumanReviewLevel;
+  reviewCategories?: string[];
+  aiReasonForReview?: string;
+  leverageScore?: number;
+  riskCategories?: RiskCategory[];
+  defaultIfSkipped?: string;
+  riskIfWrong?: string;
+  relatedFiles?: string[];
+  canAutoApply?: boolean;
+  assumptionLog?: PlanningAssumption[];
+  validationResult?: DecisionValidationResult;
+  source?: DecisionSource[];
+}
+
+export type DecisionSource = 'user_decision' | 'code_evidence' | 'validation_result' | 'ai_inference' | 'needs_review';
+
+export interface DecisionValidationResult {
+  typecheck: string;
+  build: string;
+  test: string;
+  lint: string;
+  status: string;
+  repairAttempted?: boolean;
 }
 
 export interface SavedTutorial {
@@ -74,8 +116,8 @@ const PATTERN_GROUPS = [
 
 const BASE_CONFIRMED_DECISIONS = [
   'Product form: VS Code extension with one Activity Bar container and two sidebar views -- the UI and commands are centered around Agent View and Step View.',
-  'Core agent behavior: mandatory planning gate before implementation -- Debtcrasher exists to preserve explicit high-leverage judgment, not just auto-code.',
-  'Planning protocol: non-trivial work starts with one planning pass that surfaces up to 3 high-leverage questions at once -- implementation begins only after those answers are confirmed.',
+  'Core agent behavior: mandatory Human Review Gate before implementation -- Debtcrasher exists to preserve explicit human review, not just auto-code.',
+  'Planning protocol: non-trivial work starts with one planning pass that surfaces REVIEW_REQUIRED items first and records REVIEW_RECOMMENDED or AUTO_WITH_LOG items in the assumption log -- implementation begins only after those answers are confirmed.',
   'Decision memory: AGENT.md is the compressed cache and DECISIONS.md is the full log -- agents should read the cache first and the full log only when needed.',
   'Step output flow: selected steps become markdown files and open in the editor -- learning material should live as normal workspace files.',
   'History behavior: saved markdown opens directly in VS Code -- there is no inline preview state in Step View.',
@@ -137,6 +179,46 @@ export class LogManager {
     const nextBlocks = entries.map((entry) => this.renderLogBlock(entry)).join('\n\n');
     const nextContent = current.trim().length > 0 ? `${current.trimEnd()}\n\n${nextBlocks}\n` : `${nextBlocks}\n`;
     await this.writeTextFile(logUri, nextContent);
+  }
+
+  public async updateDecisionImplementationMetadata(
+    decisionIds: string[],
+    metadata: {
+      relatedFiles: string[];
+      overwrittenFiles?: string[];
+      validationResult: DecisionValidationResult;
+    }
+  ): Promise<void> {
+    if (decisionIds.length === 0) {
+      return;
+    }
+
+    const logUri = await this.ensureLogFile();
+    const entries = await this.readLogEntries();
+    const targetIds = new Set(decisionIds);
+    const relatedFiles = Array.from(new Set([
+      ...metadata.relatedFiles,
+      ...(metadata.overwrittenFiles ?? []).map((file) => `${file} (overwritten)`)
+    ])).sort((left, right) => left.localeCompare(right));
+
+    const updatedEntries = entries
+      .slice()
+      .reverse()
+      .map((entry) => {
+        if (!targetIds.has(entry.id)) {
+          return entry;
+        }
+
+        return {
+          ...entry,
+          relatedFiles,
+          validationResult: metadata.validationResult,
+          source: Array.from(new Set([...entry.source, 'code_evidence', 'validation_result']))
+        } satisfies DecisionLogEntry;
+      });
+
+    const nextContent = updatedEntries.map((entry) => this.renderLogBlock(entry)).join('\n\n');
+    await this.writeTextFile(logUri, nextContent.trim().length > 0 ? `${nextContent}\n` : '');
   }
 
   public async readLogEntries(): Promise<DecisionLogEntry[]> {
@@ -278,6 +360,14 @@ export class LogManager {
       similarEntries.length > 0
         ? ['- Similar past decisions:', ...similarEntries].join('\n')
         : '- Similar past decisions: none close enough',
+      '- Duplicate prevention metadata:',
+      ...entries.slice(0, 12).map((entry) => [
+        `  - id: ${entry.id}`,
+        `    topic: ${entry.title}`,
+        `    risk_categories: ${entry.riskCategories.join(', ') || 'none'}`,
+        `    related_files: ${entry.relatedFiles.join(', ') || 'none'}`,
+        `    selected: ${extractChoiceLabel(pickChosenSummary(entry), entry.userChoice)}`
+      ].join('\n')),
       '- Use these patterns only as a ranking bias. Never override the current request.'
     ].join('\n');
   }
@@ -377,43 +467,321 @@ export class LogManager {
   }
 
   private renderLogBlock(entry: DecisionLogEntryInput): string {
+    const id = entry.id || buildDecisionId(entry.date, entry.title);
+    const options = entry.options && entry.options.length > 0
+      ? entry.options
+      : [entry.optionA, entry.optionB].filter(Boolean);
+    const riskCategories = entry.riskCategories && entry.riskCategories.length > 0
+      ? entry.riskCategories
+      : ['needs_review'];
+    const source = entry.source && entry.source.length > 0
+      ? entry.source
+      : ['user_decision', 'ai_inference', 'needs_review'];
+    const validation = entry.validationResult ?? {
+      typecheck: 'not available',
+      build: 'not available',
+      test: 'not available',
+      lint: 'not available',
+      status: 'needs_review'
+    };
+    const relatedFiles = entry.relatedFiles && entry.relatedFiles.length > 0
+      ? entry.relatedFiles
+      : ['needs_review'];
+    const reviewLevel = normalizeHumanReviewLevel(entry.humanReviewLevel, entry.leverageScore);
+    const reviewCategories = entry.reviewCategories && entry.reviewCategories.length > 0
+      ? entry.reviewCategories
+      : deriveReviewCategories(entry);
+    const assumptionLog = entry.assumptionLog && entry.assumptionLog.length > 0
+      ? entry.assumptionLog
+      : [];
+
     return [
-      `## Step: ${entry.title}`,
-      `**Date**: ${entry.date}`,
-      `**Question**: ${collapseLine(entry.question)}`,
-      `**Option A**: ${collapseLine(entry.optionA)}`,
-      `**Option B**: ${collapseLine(entry.optionB)}`,
-      `**User chose**: ${collapseLine(entry.userChoice)}`,
-      `**Outcome**: ${collapseLine(entry.outcome)}`
-    ].join('\n');
+      `## ${id}`,
+      '### Question',
+      collapseLine(entry.question),
+      '',
+      '### Options',
+      ...options.map((option, index) => `- ${choiceLabelForIndex(index)}. ${collapseLine(option)}`),
+      '',
+      '### Selected',
+      collapseLine(entry.userChoice),
+      '',
+      '### Human Review Level',
+      reviewLevel,
+      '',
+      '### Review Categories',
+      ...reviewCategories.map((category) => `- ${category}`),
+      '',
+      '### AI Reason For Review',
+      collapseLine(entry.aiReasonForReview || entry.reason || `AI-generated reason: ${entry.outcome}`),
+      '',
+      '### Reason',
+      collapseLine(entry.reason || `AI-generated reason: ${entry.outcome}`),
+      '',
+      '### Risk Categories',
+      ...riskCategories.map((category) => `- ${category}`),
+      '',
+      '### Default If Skipped',
+      collapseLine(entry.defaultIfSkipped || 'needs_review'),
+      '',
+      '### Risk If Wrong',
+      collapseLine(entry.riskIfWrong || 'needs_review'),
+      '',
+      '### Related Files',
+      ...relatedFiles.map((file) => `- ${file}`),
+      assumptionLog.length > 0 ? '' : undefined,
+      assumptionLog.length > 0 ? '### Assumption Log' : undefined,
+      ...assumptionLog.flatMap((assumption, index) => renderAssumptionLogBlock(assumption, index)).filter(Boolean),
+      '',
+      '### Validation Result',
+      `- typecheck: ${validation.typecheck}`,
+      `- build: ${validation.build}`,
+      `- test: ${validation.test}`,
+      `- lint: ${validation.lint}`,
+      `- repair_attempted: ${validation.repairAttempted ? 'true' : 'false'}`,
+      `- status: ${validation.status}`,
+      '',
+      '### Source',
+      ...source.map((item) => `- ${item}`)
+    ].filter((line) => typeof line === 'string').join('\n');
   }
 
   private parseLogEntries(content: string): DecisionLogEntry[] {
     const sections = content
-      .split(/(?=^## Step:\s+)/gm)
+      .split(/(?=^##\s+(?:D-\d{8}-\d{6}-|Step:\s+))/gm)
       .map((section) => section.trim())
       .filter(Boolean);
 
-    const entries = sections.map((section) => ({
-      id: Buffer.from(
-        `${extractField(section, /^## Step:\s*(.+)$/m)}::${extractField(section, /^\*\*Date\*\*:\s*(.+)$/m)}`,
-        'utf8'
-      ).toString('base64url'),
-      title: extractField(section, /^## Step:\s*(.+)$/m),
-      date: extractField(section, /^\*\*Date\*\*:\s*(.+)$/m),
-      question: extractField(section, /^\*\*Question\*\*:\s*(.+)$/m),
-      optionA: extractField(section, /^\*\*Option A\*\*:\s*(.+)$/m),
-      optionB: extractField(section, /^\*\*Option B\*\*:\s*(.+)$/m),
-      userChoice: extractField(section, /^\*\*User chose\*\*:\s*(.+)$/m),
-      outcome: extractField(section, /^\*\*Outcome\*\*:\s*(.+)$/m)
-    } satisfies DecisionLogEntry));
+    const entries = sections.map((section) =>
+      section.startsWith('## Step:')
+        ? parseLegacyLogEntry(section)
+        : parseStructuredLogEntry(section)
+    );
 
     return entries.reverse();
   }
 }
 
+function parseStructuredLogEntry(section: string): DecisionLogEntry {
+  const id = extractField(section, /^##\s+(.+)$/m);
+  const title = titleFromDecisionId(id);
+  const options = extractListSection(section, 'Options').map((option) => option.replace(/^[A-Z]\.\s*/, '').trim());
+  const riskCategories = extractListSection(section, 'Risk Categories')
+    .filter((category): category is RiskCategory => isRiskCategory(category));
+  const reviewCategories = extractListSection(section, 'Review Categories');
+  const source = extractListSection(section, 'Source')
+    .filter((item): item is DecisionSource => isDecisionSource(item));
+  const humanReviewLevel = normalizeHumanReviewLevel(
+    extractMarkdownSection(section, 'Human Review Level') || undefined,
+    toOptionalNumber(extractMarkdownSection(section, 'Leverage Score'))
+  );
+
+  return {
+    id,
+    title,
+    date: dateFromDecisionId(id),
+    question: extractMarkdownSection(section, 'Question'),
+    options,
+    optionA: options[0] ?? '',
+    optionB: options[1] ?? '',
+    userChoice: extractMarkdownSection(section, 'Selected'),
+    outcome: extractMarkdownSection(section, 'Reason'),
+    reason: extractMarkdownSection(section, 'Reason'),
+    humanReviewLevel,
+    reviewCategories,
+    aiReasonForReview: extractMarkdownSection(section, 'AI Reason For Review'),
+    leverageScore: toOptionalNumber(extractMarkdownSection(section, 'Leverage Score')),
+    riskCategories,
+    defaultIfSkipped: extractMarkdownSection(section, 'Default If Skipped'),
+    riskIfWrong: extractMarkdownSection(section, 'Risk If Wrong'),
+    relatedFiles: extractListSection(section, 'Related Files').filter((file) => file !== 'needs_review'),
+    canAutoApply: extractMarkdownSection(section, 'Human Review Level') === 'AUTO_WITH_LOG',
+    validationResult: parseValidationSection(extractListSection(section, 'Validation Result')),
+    source
+  };
+}
+
+function parseLegacyLogEntry(section: string): DecisionLogEntry {
+  const title = extractField(section, /^## Step:\s*(.+)$/m);
+  const date = extractField(section, /^\*\*Date\*\*:\s*(.+)$/m);
+  const optionA = extractField(section, /^\*\*Option A\*\*:\s*(.+)$/m);
+  const optionB = extractField(section, /^\*\*Option B\*\*:\s*(.+)$/m);
+  return {
+    id: Buffer.from(`${title}::${date}`, 'utf8').toString('base64url'),
+    title,
+    date,
+    question: extractField(section, /^\*\*Question\*\*:\s*(.+)$/m),
+    options: [optionA, optionB].filter(Boolean),
+    optionA,
+    optionB,
+    userChoice: extractField(section, /^\*\*User chose\*\*:\s*(.+)$/m),
+    outcome: extractField(section, /^\*\*Outcome\*\*:\s*(.+)$/m),
+    reason: `AI-generated reason: ${extractField(section, /^\*\*Outcome\*\*:\s*(.+)$/m)}`,
+    humanReviewLevel: 'REVIEW_REQUIRED',
+    reviewCategories: [],
+    aiReasonForReview: `AI-generated reason: ${extractField(section, /^\*\*Outcome\*\*:\s*(.+)$/m)}`,
+    leverageScore: undefined,
+    riskCategories: [],
+    defaultIfSkipped: 'needs_review',
+    riskIfWrong: 'needs_review',
+    relatedFiles: [],
+    canAutoApply: false,
+    validationResult: {
+      typecheck: 'not available',
+      build: 'not available',
+      test: 'not available',
+      lint: 'not available',
+      status: 'needs_review'
+    },
+    source: ['user_decision', 'ai_inference', 'needs_review']
+  };
+}
+
 function extractField(section: string, pattern: RegExp): string {
   return section.match(pattern)?.[1]?.trim() ?? '';
+}
+
+function extractMarkdownSection(section: string, heading: string): string {
+  const pattern = new RegExp(`^### ${escapeRegExp(heading)}\\s*\\r?\\n([\\s\\S]*?)(?=^###\\s+|\\s*$)`, 'm');
+  return section.match(pattern)?.[1]?.trim() ?? '';
+}
+
+function extractListSection(section: string, heading: string): string[] {
+  return extractMarkdownSection(section, heading)
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*-\s*/, '').trim())
+    .filter(Boolean);
+}
+
+function parseValidationSection(lines: string[]): DecisionValidationResult {
+  const fields = new Map<string, string>();
+  for (const line of lines) {
+    const match = line.match(/^([^:]+):\s*(.*)$/);
+    if (match) {
+      fields.set(match[1].trim(), match[2].trim());
+    }
+  }
+  return {
+    typecheck: fields.get('typecheck') || 'not available',
+    build: fields.get('build') || 'not available',
+    test: fields.get('test') || 'not available',
+    lint: fields.get('lint') || 'not available',
+    repairAttempted: fields.get('repair_attempted') === 'true',
+    status: fields.get('status') || 'needs_review'
+  };
+}
+
+function buildDecisionId(dateValue: string, title: string): string {
+  return `D-${formatDecisionTimestamp(new Date(dateValue))}-${sanitizeDecisionTitle(title)}`;
+}
+
+function formatDecisionTimestamp(date: Date): string {
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  return [
+    safeDate.getFullYear(),
+    pad(safeDate.getMonth() + 1),
+    pad(safeDate.getDate())
+  ].join('')
+    + '-'
+    + [pad(safeDate.getHours()), pad(safeDate.getMinutes()), pad(safeDate.getSeconds())].join('');
+}
+
+function sanitizeDecisionTitle(title: string): string {
+  const normalized = title
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 36);
+  return normalized || 'decision';
+}
+
+function titleFromDecisionId(id: string): string {
+  return id.replace(/^D-\d{8}-\d{6}-/, '').replace(/-/g, ' ').trim() || id;
+}
+
+function dateFromDecisionId(id: string): string {
+  const match = id.match(/^D-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-/);
+  if (!match) {
+    return '';
+  }
+  return `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}`;
+}
+
+function choiceLabelForIndex(index: number): string {
+  return String.fromCharCode('A'.charCodeAt(0) + index);
+}
+
+function toOptionalNumber(value: string): number | undefined {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function normalizeHumanReviewLevel(value?: string, leverageScore?: number): HumanReviewLevel {
+  if (value === 'REVIEW_REQUIRED' || value === 'REVIEW_RECOMMENDED' || value === 'AUTO_WITH_LOG') {
+    return value;
+  }
+  if (typeof leverageScore === 'number' && leverageScore >= 4) {
+    return 'REVIEW_REQUIRED';
+  }
+  if (typeof leverageScore === 'number' && leverageScore >= 2) {
+    return 'REVIEW_RECOMMENDED';
+  }
+  return 'AUTO_WITH_LOG';
+}
+
+function deriveReviewCategories(entry: Pick<DecisionLogEntryInput, 'riskCategories' | 'leverageScore' | 'relatedFiles' | 'reason'>): string[] {
+  const categories = new Set<string>();
+  if ((entry.riskCategories ?? []).includes('security') || (entry.riskCategories ?? []).includes('data_loss') || (entry.riskCategories ?? []).includes('public_contract')) {
+    categories.add('Risk Impact');
+  }
+  if ((entry.leverageScore ?? 0) >= 4) {
+    categories.add('Architecture Impact');
+  }
+  if ((entry.leverageScore ?? 0) >= 3) {
+    categories.add('Tradeoff Point');
+  }
+  if (categories.size === 0) {
+    categories.add('Learning / Reflection Value');
+  }
+  return [...categories];
+}
+
+function renderAssumptionLogBlock(assumption: PlanningAssumption, index: number): string[] {
+  return [
+    `- ${index + 1}. ${collapseLine(assumption.topic)}`,
+    `  - Human Review Level: ${assumption.human_review_level ?? 'AUTO_WITH_LOG'}`,
+    `  - Review Categories: ${(assumption.review_categories ?? []).join(', ') || 'none'}`,
+    `  - Default If Skipped: ${collapseLine(assumption.default_value)}`,
+    `  - Reason: ${collapseLine(assumption.reason)}`,
+    `  - Risk Categories: ${(assumption.risk_categories ?? []).join(', ') || 'none'}`,
+    `  - Related Files: ${(assumption.related_files ?? []).join(', ') || 'none'}`,
+    `  - Can Auto Apply: ${assumption.can_auto_apply ? 'true' : 'false'}`,
+    assumption.skipped_because ? `  - Skipped Because: ${collapseLine(assumption.skipped_because)}` : '',
+    `  - Source: ${assumption.source}`
+  ].filter(Boolean);
+}
+
+function isDecisionSource(value: string): value is DecisionSource {
+  return value === 'user_decision'
+    || value === 'code_evidence'
+    || value === 'validation_result'
+    || value === 'ai_inference'
+    || value === 'needs_review';
+}
+
+function isRiskCategory(value: string): value is RiskCategory {
+  return value === 'reversibility'
+    || value === 'security'
+    || value === 'data_loss'
+    || value === 'public_contract'
+    || value === 'user_intent'
+    || value === 'code_evidence_lack'
+    || value === 'ripple_effect'
+    || value === 'learning_value';
+}
+
+function pad(value: number): string {
+  return String(value).padStart(2, '0');
 }
 
 function collapseLine(value: string): string {
@@ -476,7 +844,10 @@ function renderProjectGuide(entries: DecisionLogEntry[], latestTask?: string, la
     '## Agent Behavior Rules',
     '- Before asking ANY question, read this file in full',
     '- If the answer can be inferred from confirmed decisions or implied constraints, do not ask - implement with that inference',
-    '- For a new task, plan first and surface at most 3 architecturally significant questions at once',
+    '- For a new task, plan first and surface REVIEW_REQUIRED items first, then record REVIEW_RECOMMENDED or AUTO_WITH_LOG items in the assumption log',
+    '- Planning questions must include human_review_level, review_categories, reason, default_if_skipped, risk_if_wrong, and risk_categories',
+    '- Do not re-ask a decision when risk category, target file/module, and decision topic overlap with an existing decision in at least 2 of those 3 dimensions',
+    '- If an existing decision may conflict with the current request, explicitly mark "기존 결정과 충돌 가능성" before asking again',
     '- After the surfaced planning questions are answered, begin implementation immediately and do not ask more questions',
     '- If a decision is listed in "Do not ask again", treat it as immutable and never surface it again',
     '- When implementing, add a one-line comment for any default assumption you made without asking: // ASSUMPTION: [what and why]',

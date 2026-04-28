@@ -88,6 +88,36 @@
           ],
           "markdownDescription": "Agent View가 어느 수준까지 질문을 직접 사용자에게 물을지 결정합니다."
         },
+        "debtcrasher.questionSensitivity": {
+          "type": "string",
+          "enum": [
+            "flow",
+            "balanced",
+            "review",
+            "strict"
+          ],
+          "default": "balanced",
+          "enumDescriptions": [
+            "REVIEW_REQUIRED만 질문하고 나머지는 기본값으로 처리합니다.",
+            "REVIEW_REQUIRED와 주요 REVIEW_RECOMMENDED 항목을 질문합니다.",
+            "REVIEW_REQUIRED와 대부분의 REVIEW_RECOMMENDED 항목을 질문합니다.",
+            "모든 후보를 보여 주고 검토 신호를 가장 엄격하게 유지합니다."
+          ],
+          "markdownDescription": "Question sensitivity level. Flow / Balanced / Review / Strict."
+        },
+        "debtcrasher.traceabilityMode": {
+          "type": "string",
+          "enum": [
+            "basic",
+            "strict"
+          ],
+          "default": "basic",
+          "enumDescriptions": [
+            "Basic mode: 최대 3개 질문, 가능한 검증만 실행, 튜토리얼 필수 섹션과 관련 근거를 확인합니다.",
+            "Strict mode: 라벨과 강한 표현 검사를 강화하고 근거 추적을 더 엄격하게 확인합니다."
+          ],
+          "markdownDescription": "Mode: Basic / Strict. Strict mode is slower but provides stronger traceability checks."
+        },
         "debtcrasher.anthropicApiKey": {
           "type": "string",
           "default": "",

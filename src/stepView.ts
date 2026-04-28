@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 
 import { AIClient } from './aiClient';
 import { LogManager } from './logManager';
+import { validateTutorialMarkdown } from './tutorialValidator';
 
 type StepViewMessage =
   | { type: 'ready' }
@@ -134,6 +135,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
       this.postMessage({
         type: 'state',
         hasWorkspace: Boolean(this.logManager.getWorkspaceRootUri()),
+        traceabilityMode: this.aiClient.getTraceabilityMode(),
         entries,
         history
       });
@@ -141,6 +143,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
       this.postMessage({
         type: 'state',
         hasWorkspace: Boolean(this.logManager.getWorkspaceRootUri()),
+        traceabilityMode: this.aiClient.getTraceabilityMode(),
         entries: [],
         history: []
       });
@@ -167,10 +170,16 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
         this.logManager.readAgentGuideContent(),
         this.logManager.readLatestImplementationSummary()
       ]);
-      const markdown = await this.aiClient.generateTutorial(selectedEntries, {
-        projectGuideContent,
-        lastImplementationSummary
-      });
+      const traceabilityMode = this.aiClient.getTraceabilityMode();
+      const rawMarkdown = await this.aiClient.generateTutorial(
+        selectedEntries,
+        {
+          projectGuideContent,
+          lastImplementationSummary
+        },
+        { traceabilityMode }
+      );
+      const { markdown, report } = validateTutorialMarkdown(rawMarkdown, selectedEntries, traceabilityMode);
       const title = buildTutorialTitle(selectedEntries);
       const tutorialUri = await this.logManager.saveTutorial(title, markdown);
 
@@ -181,7 +190,9 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
         type: 'tutorialGenerated',
         uri: tutorialUri.toString(),
         count: selectedEntries.length,
-        title
+        title,
+        validation: report,
+        traceabilityMode
       });
     } catch (error) {
       this.postError(toErrorMessage(error));
@@ -247,6 +258,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
     </header>
 
     <div id="workspaceNotice" class="notice hidden">워크스페이스를 열어야 step 로그와 저장된 markdown 기록을 사용할 수 있습니다.</div>
+    <div id="modeNotice" class="notice"></div>
     <div id="statusBanner" class="status-banner hidden"></div>
     <div id="errorBanner" class="error-banner hidden"></div>
 
@@ -299,6 +311,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
     const stepsMeta = document.getElementById('stepsMeta');
     const historyMeta = document.getElementById('historyMeta');
     const workspaceNotice = document.getElementById('workspaceNotice');
+    const modeNotice = document.getElementById('modeNotice');
     const statusBanner = document.getElementById('statusBanner');
     const errorBanner = document.getElementById('errorBanner');
 
@@ -307,7 +320,8 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
       entries: [],
       history: [],
       selectedIds: new Set(),
-      isGenerating: false
+      isGenerating: false,
+      traceabilityMode: 'basic'
     };
 
     let isDragging = false;
@@ -592,6 +606,8 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
       if (message.type === 'state') {
         clearError();
         workspaceNotice.classList.toggle('hidden', message.hasWorkspace);
+        state.traceabilityMode = message.traceabilityMode || 'basic';
+        modeNotice.textContent = 'Mode: ' + (state.traceabilityMode === 'strict' ? 'Strict' : 'Basic') + ' — Strict mode is slower but provides stronger traceability checks.';
         state.entries = message.entries || [];
         state.history = message.history || [];
         renderSteps();
@@ -604,6 +620,9 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
         state.isGenerating = false;
         state.selectedIds.clear();
         renderSteps();
+        const finalStatus = message.validation && message.validation.final_status ? message.validation.final_status : 'generated';
+        showStatus((message.count || 0) + '개 step으로 판단 기록 문서를 생성했습니다. 검증 상태: ' + finalStatus);
+        return;
         showStatus((message.count || 0) + '개의 step으로 판단 기록 문서를 생성했고, 선택 내역을 초기화했습니다.');
         return;
       }

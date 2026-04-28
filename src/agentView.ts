@@ -5,10 +5,12 @@ import {
   DecisionHistoryEntry,
   ImplementationFile,
   ImplementationResponse,
+  PlanningAssumption,
   PlanningQuestion,
   PlanningResponse
 } from './aiClient';
 import { WorkspaceContextService } from './context/WorkspaceContextService';
+import { DEMO_PLANNING_RESPONSE, DEMO_TASK, DEMO_TUTORIAL_MARKDOWN } from './demoSeed';
 import { DecisionLogEntryInput, LogManager } from './logManager';
 import {
   AgentSessionChoice,
@@ -30,7 +32,7 @@ interface SubmitTaskMessage {
 
 interface StartImplementationAnswer {
   questionId: string;
-  choiceType: 'A' | 'B' | 'custom';
+  choiceType: 'A' | 'B' | 'C' | 'D' | 'custom';
   customChoice?: string;
 }
 
@@ -48,6 +50,10 @@ interface UpdatePlanningAnswersMessage {
 
 interface NewSessionMessage {
   type: 'newSession';
+}
+
+interface RunDemoSeedMessage {
+  type: 'runDemoSeed';
 }
 
 interface RetryVerificationMessage {
@@ -97,6 +103,7 @@ type AgentViewMessage =
   | OpenHistorySessionMessage
   | ResumeHistorySessionMessage
   | NewSessionMessage
+  | RunDemoSeedMessage
   | { type: 'ready' };
 
 interface PendingPlanningSession {
@@ -108,6 +115,7 @@ interface PendingPlanningSession {
 interface WrittenImplementationFile {
   path: string;
   uri: vscode.Uri;
+  overwritten: boolean;
 }
 
 interface ImplementationFileSummary {
@@ -127,6 +135,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
   private view: vscode.WebviewView | undefined;
   private readonly sessions = new Map<string, PendingPlanningSession>();
   private readonly activeRequests = new Map<string, AbortController>();
+  private readonly demoRequestIds = new Set<string>();
   private readonly viewDisposables: vscode.Disposable[] = [];
   private currentSession: PersistedAgentSession | undefined;
   private resumeSourceSession: PersistedAgentSession | undefined;
@@ -182,6 +191,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
         }
         this.abortAllRequests();
         this.sessions.clear();
+        this.demoRequestIds.clear();
       })
     );
   }
@@ -191,6 +201,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     this.abortAllRequests();
     this.view = undefined;
     this.sessions.clear();
+    this.demoRequestIds.clear();
   }
 
   private disposeViewDisposables(): void {
@@ -207,9 +218,13 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       case 'newSession':
         this.abortAllRequests();
         this.sessions.clear();
+        this.demoRequestIds.clear();
         this.currentSession = undefined;
         this.resumeSourceSession = undefined;
         await this.postBootstrapState({ restoreLatestToday: false, showRestoreBanner: false });
+        return;
+      case 'runDemoSeed':
+        await this.handleRunDemoSeed();
         return;
       case 'submitTask':
         await this.handleSubmitTask(message);
@@ -236,6 +251,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
 
   private async postBootstrapState(options: { restoreLatestToday: boolean; showRestoreBanner: boolean }): Promise<void> {
     const provider = await this.aiClient.getProviderSummary();
+    const traceabilityMode = this.aiClient.getTraceabilityMode();
     const sessionSummaries = await this.sessionHistoryService.listSessions();
     let restoredSession: PersistedAgentSession | undefined;
 
@@ -251,6 +267,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       type: 'workspaceState',
       hasWorkspace: Boolean(this.logManager.getWorkspaceRootUri()),
       provider,
+      traceabilityMode,
       sessionSummaries,
       restoredSession: restoredSession ? serializePersistedSession(restoredSession) : undefined,
       restoredBanner: Boolean(restoredSession && options.showRestoreBanner)
@@ -259,11 +276,13 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
 
   private async postWorkspaceState(): Promise<void> {
     const provider = await this.aiClient.getProviderSummary();
+    const traceabilityMode = this.aiClient.getTraceabilityMode();
 
     this.postMessage({
       type: 'workspaceState',
       hasWorkspace: Boolean(this.logManager.getWorkspaceRootUri()),
       provider,
+      traceabilityMode,
       sessionSummaries: await this.sessionHistoryService.listSessions()
     });
   }
@@ -296,6 +315,48 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       type: 'resumePrepared',
       sessionTitle: session.title
     });
+  }
+
+  private async handleRunDemoSeed(): Promise<void> {
+    const requestId = `demo-${Date.now().toString()}`;
+    const plan = {
+      ...DEMO_PLANNING_RESPONSE,
+      questions: DEMO_PLANNING_RESPONSE.questions.map((question) => ({
+        ...question,
+        options: question.options.map((option) => ({
+          ...option,
+          pros: [...option.pros],
+          cons: [...option.cons]
+        })),
+        optionA: {
+          ...question.optionA,
+          pros: [...question.optionA.pros],
+          cons: [...question.optionA.cons]
+        },
+        optionB: {
+          ...question.optionB,
+          pros: [...question.optionB.pros],
+          cons: [...question.optionB.cons]
+        },
+        risk_categories: [...question.risk_categories],
+        related_files: [...(question.related_files ?? question.target_files ?? [])],
+        target_files: [...(question.target_files ?? question.related_files ?? [])]
+      })),
+      assumptions: [...DEMO_PLANNING_RESPONSE.assumptions],
+      assumption_log: DEMO_PLANNING_RESPONSE.assumption_log.map((assumption) => ({
+        ...assumption,
+        risk_categories: [...assumption.risk_categories]
+      }))
+    };
+
+    this.sessions.set(requestId, {
+      task: DEMO_TASK,
+      plan,
+      workspaceContext: 'DEMO MODE: 실제 workspace 파일을 읽거나 수정하지 않습니다.'
+    });
+    this.demoRequestIds.add(requestId);
+    this.postPhaseUpdate(requestId, 'DEMO MODE: 실제 파일 변경 없이 Planning Gate → Decision Log → Validation → Tutorial 흐름을 보여줍니다.', 'planning');
+    this.postMessage({ type: 'planningResponse', requestId, plan, demoMode: true });
   }
 
   private async handleSubmitTask(message: SubmitTaskMessage): Promise<void> {
@@ -334,12 +395,14 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       );
       const referenceContext = await this.logManager.readProjectGuideContext();
       const patternContext = await this.logManager.readDecisionPatternContext(task);
+      const decisionMemory = await this.logManager.readLogEntries();
       const plan = await this.aiClient.generatePlan(
         task,
         workspaceContext,
         referenceContext,
         patternContext,
         resumeContext,
+        decisionMemory,
         abortController.signal
       );
 
@@ -354,8 +417,17 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
         planning: {
           summary: plan.summary,
           assumptions: [...plan.assumptions],
+          assumption_log: plan.assumption_log.map((assumption) => ({
+            ...assumption,
+            risk_categories: [...assumption.risk_categories]
+          })),
           questions: plan.questions.map((question) => ({
             ...question,
+            options: question.options.map((option) => ({
+              ...option,
+              pros: [...option.pros],
+              cons: [...option.cons]
+            })),
             optionA: {
               ...question.optionA,
               pros: [...question.optionA.pros],
@@ -387,7 +459,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       return;
     }
 
-    const resolved = resolvePlanAnswers(session.task, session.plan.questions, message.answers);
+    const resolved = resolvePlanAnswers(session.task, session.plan.questions, message.answers, session.plan.assumption_log ?? []);
     if (!resolved) {
       this.postError('모든 질문에 답한 뒤 개발 시작을 눌러 주세요.', message.requestId);
       return;
@@ -396,6 +468,12 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     try {
       const abortController = this.beginRequest(message.requestId);
       await this.updatePlanningMessageChoices(message.requestId, buildSessionChoices(session.plan.questions, message.answers));
+      if (this.demoRequestIds.has(message.requestId)) {
+        this.sessions.delete(message.requestId);
+        this.demoRequestIds.delete(message.requestId);
+        await this.finishDemoTask(message.requestId, resolved.history);
+        return;
+      }
       this.postPhaseUpdate(
         message.requestId,
         '현재 작업: 선택한 판단을 DECISIONS.md와 AGENT.md에 기록하고 구현을 시작하는 중입니다.',
@@ -414,6 +492,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
         resolved.history,
         session.plan,
         session.workspaceContext,
+        resolved.decisionIds,
         abortController.signal
       );
     } catch (error) {
@@ -433,6 +512,80 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     }
 
     await this.updatePlanningMessageChoices(message.requestId, buildSessionChoices(session.plan.questions, message.answers));
+  }
+
+  private async finishDemoTask(requestId: string, history: DecisionHistoryEntry[]): Promise<void> {
+    this.postPhaseUpdate(requestId, 'DEMO MODE: DECISIONS.md preview와 검증 결과를 표시합니다. 실제 파일은 쓰지 않습니다.', 'verification');
+    this.postProgress(requestId, 'log_done');
+    this.postProgress(requestId, 'verify_done', {
+      passed: true,
+      output: 'demo validation seed'
+    });
+
+    const verificationResults = [
+      {
+        label: 'typecheck',
+        command: 'npm run typecheck',
+        available: true,
+        ok: true,
+        timedOut: false,
+        exitCode: 0,
+        output: 'demo seed: typecheck passed',
+        status: 'passed' as const
+      },
+      {
+        label: 'build',
+        command: 'npm run build',
+        available: false,
+        ok: false,
+        timedOut: false,
+        exitCode: null,
+        output: 'not available',
+        status: 'not_available' as const
+      },
+      {
+        label: 'test',
+        command: 'npm test',
+        available: false,
+        ok: false,
+        timedOut: false,
+        exitCode: null,
+        output: 'not available',
+        status: 'not_available' as const
+      },
+      {
+        label: 'lint',
+        command: 'npm run lint',
+        available: false,
+        ok: false,
+        timedOut: false,
+        exitCode: null,
+        output: 'not available',
+        status: 'not_available' as const
+      }
+    ];
+    const responsePayload = {
+      type: 'implementationResponse',
+      requestId,
+      currentWork: 'DEMO MODE: TODO 저장 기능 sample flow',
+      summary: `실제 파일 변경 없이 ${history.length}개 demo 결정을 기준으로 Decision Log, Validation, Tutorial 흐름을 표시했습니다.`,
+      files: [
+        { path: 'DECISIONS.md (demo preview, not written)', description: '구조화된 decision entry preview' },
+        { path: 'src/storage/todoStorage.ts (demo preview, not written)', description: '관련 구현 파일 예시' },
+        { path: '.ai-tutorials/todo-storage-demo.md (demo preview, not written)', description: '튜토리얼 seed markdown 예시' }
+      ],
+      runInstructions: [
+        'DEMO MODE: 실제 파일 생성/수정은 수행하지 않았습니다.',
+        `Bundled tutorial seed length: ${DEMO_TUTORIAL_MARKDOWN.length} characters`
+      ],
+      guidePath: 'DECISIONS.md / AGENT.md (demo preview, not written)',
+      verificationSummary: 'demo validation seed: typecheck passed, build/test/lint not available.',
+      verificationResults: serializeVerificationResults(verificationResults),
+      autoRepairApplied: false,
+      repairFailureMessage: '',
+      manualVerificationAvailable: false
+    };
+    this.postMessage(responsePayload);
   }
 
   private async handleRetryVerification(message: RetryVerificationMessage): Promise<void> {
@@ -490,7 +643,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
         verificationCommands,
         abortController.signal
       );
-      const failedCount = verificationResults.filter((result) => !result.ok).length;
+      const failedCount = verificationResults.filter(isExecutedVerificationFailure).length;
 
       const retryPayload = {
         type: 'verificationRetryResult',
@@ -540,6 +693,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     history: DecisionHistoryEntry[],
     plan: PlanningResponse,
     workspaceContext: string,
+    decisionIds: string[],
     abortSignal?: AbortSignal
   ): Promise<void> {
     this.postPhaseUpdate(
@@ -581,7 +735,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
           abortSignal
         );
 
-        if (verificationResults.some((result) => !result.ok)) {
+        if (verificationResults.some(isExecutedVerificationFailure)) {
           this.postPhaseUpdate(requestId, '현재 작업: 검증 실패를 바탕으로 자동 수정 중입니다.', 'verification');
           this.postProgress(requestId, 'repair_start');
 
@@ -639,7 +793,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
         }
       }
 
-      if (verificationResults.some((result) => !result.ok)) {
+      if (verificationResults.some(isExecutedVerificationFailure)) {
         manualVerificationAvailable = true;
         if (!repairFailureMessage) {
           repairFailureMessage = autoRepairApplied
@@ -647,6 +801,12 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
             : '자동 검증이 실패했습니다. 아래 검증 출력을 확인한 뒤 수동 수정 후 재검증해 주세요.';
         }
       }
+
+      await this.logManager.updateDecisionImplementationMetadata(decisionIds, {
+        relatedFiles: files.map((file) => file.path),
+        overwrittenFiles: files.filter((file) => file.overwritten).map((file) => file.path),
+        validationResult: buildDecisionValidationResult(verificationResults, autoRepairApplied)
+      });
 
       const guideUri = await this.logManager.syncProjectGuide(task, implementation.summary);
       this.postProgress(requestId, 'agent_updated');
@@ -829,6 +989,20 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
 
     for (const file of files) {
       const normalizedPath = normalizeRelativePath(file.path);
+      if (isSensitivePath(normalizedPath)) {
+        this.postPhaseUpdate(
+          requestId,
+          `경로 안전성 확인 필요: ${normalizedPath} 파일은 secret/credential로 보일 수 있어 사용자 확인 없이는 수정하지 않습니다.`
+        );
+        const confirmation = await vscode.window.showWarningMessage(
+          `Debtcrasher가 민감한 파일로 보이는 '${normalizedPath}'를 수정하려고 합니다. 계속할까요?`,
+          { modal: true },
+          '수정 허용'
+        );
+        if (confirmation !== '수정 허용') {
+          throw new Error(`민감한 파일 수정이 차단되었습니다: ${normalizedPath}`);
+        }
+      }
       const segments = normalizedPath.split('/');
       const fileName = segments.pop();
       if (!fileName) {
@@ -860,7 +1034,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
           lineCount: countLines(file.content)
         });
       }
-      written.push({ path: normalizedPath, uri: targetUri });
+      written.push({ path: normalizedPath, uri: targetUri, overwritten: alreadyExists });
     }
 
     return written;
@@ -954,6 +1128,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
         <p id="environmentMeta" class="topbar-subtitle">환경 정보를 불러오는 중입니다.</p>
       </div>
       <div class="topbar-actions">
+        <button id="demoSeedBtn" class="icon-button" title="Demo Seed" aria-label="Demo Seed"><i class="codicon codicon-beaker"></i></button>
         <button id="newSessionBtn" class="icon-button" title="새 세션" aria-label="새 세션"><i class="codicon codicon-add"></i></button>
       </div>
     </header>
@@ -991,6 +1166,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     const thread = document.getElementById('thread');
     const inputForm = document.getElementById('inputForm');
     const userInput = document.getElementById('userInput');
+    const demoSeedBtn = document.getElementById('demoSeedBtn');
     const newSessionBtn = document.getElementById('newSessionBtn');
     const environmentMeta = document.getElementById('environmentMeta');
     const chatModeBtn = document.getElementById('chatModeBtn');
@@ -1011,6 +1187,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
 
     const state = {
       provider: null,
+      traceabilityMode: 'basic',
       hasWorkspace: false,
       activeRequestId: '',
       activePhase: '',
@@ -1084,9 +1261,10 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       scrollToBottom(thread);
     }
 
-    function updateEnvironmentMeta(provider, hasWorkspace) {
+    function updateEnvironmentMeta(provider, hasWorkspace, traceabilityMode) {
       if (!provider) return;
-      environmentMeta.textContent = provider.displayName + ' ' + provider.model + ' / 워크스페이스 ' + (hasWorkspace ? '연결됨' : '없음');
+      const modeLabel = traceabilityMode === 'strict' ? 'Strict' : 'Basic';
+      environmentMeta.textContent = provider.displayName + ' ' + provider.model + ' / 워크스페이스 ' + (hasWorkspace ? '연결됨' : '없음') + ' / Mode: ' + modeLabel + ' — Strict mode is slower but provides stronger traceability checks.';
     }
 
     function setPhase(requestId, phase) {
@@ -1170,6 +1348,9 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
         return '검증 실행 중: ' + (message.command || '');
       }
       if (message.event === 'verify_done') {
+        if (message.output === 'not available') {
+          return '검증 명령 없음: not available';
+        }
         return message.passed ? '검증 통과' : '검증 실패 — 자동 수정 시작';
       }
       if (message.event === 'repair_start') {
@@ -1189,7 +1370,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       if (message.event === 'file_done') return 'check';
       if (message.event === 'file_edit') return 'edit';
       if (message.event === 'verify_start') return 'beaker';
-      if (message.event === 'verify_done') return message.passed ? 'pass' : 'error';
+      if (message.event === 'verify_done') return message.output === 'not available' ? 'circle-slash' : message.passed ? 'pass' : 'error';
       if (message.event === 'repair_start') return 'tools';
       if (message.event === 'log_done') return 'book';
       if (message.event === 'agent_updated') return 'file-symlink-file';
@@ -1233,10 +1414,17 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
           .filter(Boolean)
       );
       const fileCount = fileNames.size;
+      const verificationResults = resultMessage?.verificationResults || [];
+      const hasFailedVerification = verificationResults.some((result) => result.available !== false && result.ok === false);
+      const hasPassedVerification = verificationResults.some((result) => result.available !== false && result.ok === true);
       const verificationPassed = typeof resultMessage?.verificationSummary === 'string'
         ? resultMessage.verificationSummary.includes('통과')
         : group.items.filter((item) => item.event === 'verify_done').slice(-1)[0]?.passed === true;
-      const verificationLabel = verificationPassed ? '검증 통과' : '검증 실패';
+      const verificationLabel = hasFailedVerification
+        ? '검증 실패'
+        : hasPassedVerification || verificationPassed
+          ? '검증 통과'
+          : '검증 없음';
       const elapsed = formatDuration(Date.now() - group.startedAt);
       return '파일 ' + fileCount + '개 생성 · ' + verificationLabel + ' · ' + elapsed;
     }
@@ -1285,9 +1473,9 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
               '<li class="verification-item">',
               '  <div class="verification-row">',
               '    <code>' + escapeHtml(result.command) + '</code>',
-              '    <span class="verification-badge ' + (result.ok ? 'verification-pass' : 'verification-fail') + '">' + (result.ok ? 'PASS' : (result.timedOut ? 'TIMEOUT' : 'FAIL')) + '</span>',
+              '    <span class="verification-badge ' + (result.available === false ? 'verification-na' : result.ok ? 'verification-pass' : 'verification-fail') + '">' + (result.available === false ? 'NOT AVAILABLE' : result.ok ? 'PASS' : (result.timedOut ? 'TIMEOUT' : 'FAIL')) + '</span>',
               '  </div>',
-              result.output
+              result.output && result.output !== 'not available'
                 ? result.ok
                   ? '  <details class="verification-details"><summary>출력 보기</summary><pre class="verification-output">' + escapeHtml(result.output) + '</pre></details>'
                   : '  <pre class="verification-output verification-output-inline">' + escapeHtml(result.output) + '</pre>'
@@ -1346,6 +1534,49 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       ].join('');
     }
 
+    function getQuestionOptions(question) {
+      if (Array.isArray(question.options) && question.options.length > 0) {
+        return question.options.slice(0, 4);
+      }
+      return [question.optionA, question.optionB].filter(Boolean);
+    }
+
+    function choiceLabel(index) {
+      return ['A', 'B', 'C', 'D'][index] || 'D';
+    }
+
+    function normalizeHumanReviewLevel(value) {
+      return value === 'REVIEW_REQUIRED' || value === 'REVIEW_RECOMMENDED' || value === 'AUTO_WITH_LOG'
+        ? value
+        : 'AUTO_WITH_LOG';
+    }
+
+    function renderReviewLevelLabel(level) {
+      if (level === 'REVIEW_REQUIRED') {
+        return '사용자 확인 필수';
+      }
+      if (level === 'REVIEW_RECOMMENDED') {
+        return '검토 권장';
+      }
+      return '자동 처리 + 로그';
+    }
+
+    function renderQuestionMetadata(question) {
+      const risks = Array.isArray(question.risk_categories) ? question.risk_categories.join(', ') : '';
+      const reviewCategories = Array.isArray(question.review_categories) ? question.review_categories.join(', ') : '';
+      const reviewLevel = normalizeHumanReviewLevel(question.human_review_level);
+      return [
+        '<div class="question-metadata">',
+        '  <span class="review-badge review-' + escapeHtml(reviewLevel.toLowerCase()) + '">' + escapeHtml(renderReviewLevelLabel(reviewLevel)) + '</span>',
+        question.reason ? '  <span>' + escapeHtml(question.reason) + '</span>' : '',
+        question.default_if_skipped ? '  <span>Default: ' + escapeHtml(question.default_if_skipped) + '</span>' : '',
+        question.risk_if_wrong ? '  <span>Risk: ' + escapeHtml(question.risk_if_wrong) + '</span>' : '',
+        reviewCategories ? '  <span>Review Categories: ' + escapeHtml(reviewCategories) + '</span>' : '',
+        risks ? '  <span>Categories: ' + escapeHtml(risks) + '</span>' : '',
+        '</div>'
+      ].join('');
+    }
+
     function renderQuestions(plan) {
       if (!plan.questions || plan.questions.length === 0) {
         return '<div class="summary-card"><p class="tradeoff-title">질문</p><p>추가로 직접 결정할 항목이 없습니다. 기본값으로 바로 구현을 시작할 수 있습니다.</p></div>';
@@ -1360,9 +1591,9 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
         '    </div>',
         '    <span class="impact-badge impact-' + escapeHtml((question.impact || '').toLowerCase()) + '">' + escapeHtml(question.impact) + '</span>',
         '  </div>',
+        renderQuestionMetadata(question),
         '  <div class="options-grid">',
-        renderOptionHtml(question.id, 'A', question.optionA, false),
-        renderOptionHtml(question.id, 'B', question.optionB, false),
+        getQuestionOptions(question).map((option, optionIndex) => renderOptionHtml(question.id, choiceLabel(optionIndex), option, false)).join(''),
         '  </div>',
         '  <div class="custom-choice">',
         '    <label for="custom-' + escapeHtml(question.id) + '">직접 선택 입력</label>',
@@ -1389,9 +1620,12 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
           '    </div>',
           '    <span class="impact-badge impact-' + escapeHtml((question.impact || '').toLowerCase()) + '">' + escapeHtml(question.impact) + '</span>',
           '  </div>',
+          renderQuestionMetadata(question),
           '  <div class="options-grid">',
-          renderOptionHtml(question.id, 'A', question.optionA, Boolean(selected && selected.choiceType === 'A')),
-          renderOptionHtml(question.id, 'B', question.optionB, Boolean(selected && selected.choiceType === 'B')),
+          getQuestionOptions(question).map((option, optionIndex) => {
+            const label = choiceLabel(optionIndex);
+            return renderOptionHtml(question.id, label, option, Boolean(selected && selected.choiceType === label));
+          }).join(''),
           '  </div>',
           selected
             ? '<p class="readonly-choice">선택: ' + escapeHtml(selected.userChoice || selected.selectedLabel) + '</p>'
@@ -1748,13 +1982,22 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       userInput.focus();
     });
 
+    demoSeedBtn.addEventListener('click', () => {
+      setMode('chat');
+      setRestoreBanner(false);
+      clearPhaseIndicator();
+      resetChatThread('DEMO MODE: TODO 저장 기능 sample flow를 시작합니다. 실제 파일 변경은 수행하지 않습니다.');
+      vscode.postMessage({ type: 'runDemoSeed' });
+    });
+
     window.addEventListener('message', (event) => {
       const message = event.data;
 
       if (message.type === 'workspaceState') {
         state.provider = message.provider;
         state.hasWorkspace = Boolean(message.hasWorkspace);
-        updateEnvironmentMeta(state.provider, state.hasWorkspace);
+        state.traceabilityMode = message.traceabilityMode || 'basic';
+        updateEnvironmentMeta(state.provider, state.hasWorkspace, state.traceabilityMode);
         state.sessionSummaries = Array.isArray(message.sessionSummaries) ? message.sessionSummaries : state.sessionSummaries;
         renderSessionList();
         if (message.restoredSession) {
@@ -1871,18 +2114,22 @@ function mergeImplementationResponses(
 function serializeVerificationResults(results: VerificationResult[]): Array<{
   label: string;
   command: string;
+  available: boolean;
   ok: boolean;
   timedOut: boolean;
   exitCode: number | null;
   output: string;
+  status: string;
 }> {
   return results.map((result) => ({
     label: result.label,
     command: result.command,
+    available: result.available,
     ok: result.ok,
     timedOut: result.timedOut,
     exitCode: result.exitCode,
-    output: result.output
+    output: result.output,
+    status: result.status
   }));
 }
 
@@ -1891,15 +2138,58 @@ function summarizeVerification(results: VerificationResult[], autoRepairApplied:
     return '';
   }
 
-  const passedCount = results.filter((result) => result.ok).length;
-  const failedCount = results.length - passedCount;
+  const executableResults = results.filter((result) => result.available);
+  const passedCount = executableResults.filter((result) => result.ok).length;
+  const failedCount = executableResults.filter(isExecutedVerificationFailure).length;
+  const unavailableCount = results.filter((result) => !result.available).length;
   const repairSummary = autoRepairApplied ? '자동 수정 1회를 거친 뒤 다시 검증했습니다.' : '';
 
+  if (executableResults.length === 0) {
+    return [`실행 가능한 자동 검증 명령을 찾지 못했습니다.`, unavailableCount > 0 ? `${unavailableCount}개 검증 항목은 not available입니다.` : '', repairSummary].filter(Boolean).join(' ');
+  }
+
   if (failedCount === 0) {
-    return ['자동 검증을 통과했습니다.', repairSummary].filter(Boolean).join(' ');
+    return [`자동 검증을 통과했습니다. (${passedCount}개 실행)`, unavailableCount > 0 ? `${unavailableCount}개 검증 항목은 not available입니다.` : '', repairSummary].filter(Boolean).join(' ');
   }
 
   return [`자동 검증에서 ${failedCount}개 명령이 실패했습니다.`, repairSummary].filter(Boolean).join(' ');
+}
+
+function isExecutedVerificationFailure(result: VerificationResult): boolean {
+  return result.available && !result.ok;
+}
+
+function buildDecisionValidationResult(results: VerificationResult[], autoRepairApplied: boolean): {
+  typecheck: string;
+  build: string;
+  test: string;
+  lint: string;
+  status: string;
+  repairAttempted: boolean;
+} {
+  const statusByLabel = new Map(results.map((result) => [result.label, verificationStatusLabel(result)]));
+  const hasFailure = results.some(isExecutedVerificationFailure);
+  const hasPassed = results.some((result) => result.available && result.ok);
+  const allUnavailable = results.length === 0 || results.every((result) => !result.available);
+
+  return {
+    typecheck: statusByLabel.get('typecheck') ?? 'not available',
+    build: statusByLabel.get('build') ?? 'not available',
+    test: statusByLabel.get('test') ?? 'not available',
+    lint: statusByLabel.get('lint') ?? 'not available',
+    repairAttempted: autoRepairApplied,
+    status: hasFailure ? 'needs_review' : allUnavailable ? 'not_available' : hasPassed ? 'passed' : 'needs_review'
+  };
+}
+
+function verificationStatusLabel(result: VerificationResult): string {
+  if (!result.available) {
+    return 'not available';
+  }
+  if (result.ok) {
+    return 'passed';
+  }
+  return result.timedOut ? 'timeout' : 'failed';
 }
 function formatVerificationContext(results: VerificationResult[]): string {
   if (results.length === 0) {
@@ -1908,7 +2198,7 @@ function formatVerificationContext(results: VerificationResult[]): string {
 
   return results
     .map((result, index) => {
-      const status = result.ok ? 'PASS' : result.timedOut ? 'TIMEOUT' : 'FAIL';
+      const status = !result.available ? 'NOT_AVAILABLE' : result.ok ? 'PASS' : result.timedOut ? 'TIMEOUT' : 'FAIL';
       const exitCode = result.exitCode === null ? 'none' : String(result.exitCode);
       const output = result.output.trim() || '(no output)';
       return [
@@ -1927,8 +2217,9 @@ function formatVerificationContext(results: VerificationResult[]): string {
 function resolvePlanAnswers(
   task: string,
   questions: PlanningQuestion[],
-  answers: StartImplementationAnswer[]
-): { history: DecisionHistoryEntry[]; logEntries: DecisionLogEntryInput[] } | undefined {
+  answers: StartImplementationAnswer[],
+  assumptionLog: PlanningAssumption[]
+): { history: DecisionHistoryEntry[]; logEntries: DecisionLogEntryInput[]; decisionIds: string[]; assumptionEntries: PlanningAssumption[] } | undefined {
   const answerMap = new Map(answers.map((answer) => [answer.questionId, answer]));
 
   if (questions.some((question) => !answerMap.has(question.id))) {
@@ -1938,6 +2229,7 @@ function resolvePlanAnswers(
   const timestamp = new Date().toISOString();
   const history: DecisionHistoryEntry[] = [];
   const logEntries: DecisionLogEntryInput[] = [];
+  const decisionIds: string[] = [];
 
   for (const question of questions) {
     const answer = answerMap.get(question.id);
@@ -1950,42 +2242,81 @@ function resolvePlanAnswers(
       return undefined;
     }
 
+    const decisionId = buildDecisionId(timestamp, question.topic);
+    decisionIds.push(decisionId);
+
     history.push({
+      id: decisionId,
       title: question.topic,
       decisionPoint: question.question,
       userChoice: resolvedChoice.userChoice,
-      outcome: resolvedChoice.outcome
+      outcome: resolvedChoice.outcome,
+      reason: question.reason,
+      leverageScore: question.leverage_score,
+      riskCategories: [...question.risk_categories],
+      defaultIfSkipped: question.default_if_skipped,
+      riskIfWrong: question.risk_if_wrong,
+      relatedFiles: question.related_files ?? question.target_files ?? [],
+      source: ['user_decision', 'ai_inference']
     });
 
     logEntries.push({
+      id: decisionId,
       title: question.topic,
       date: timestamp,
       question: `${task} / ${question.question}`,
+      options: question.options.map((option, index) => summarizeOption(choiceLabelForIndex(index), option)),
       optionA: summarizeOption('A', question.optionA),
       optionB: summarizeOption('B', question.optionB),
       userChoice: resolvedChoice.userChoice,
-      outcome: resolvedChoice.outcome
+      outcome: resolvedChoice.outcome,
+      reason: `AI-generated reason: ${question.reason}`,
+      leverageScore: question.leverage_score,
+      riskCategories: [...question.risk_categories],
+      defaultIfSkipped: question.default_if_skipped,
+      riskIfWrong: question.risk_if_wrong,
+      relatedFiles: question.related_files ?? question.target_files ?? [],
+      validationResult: {
+        typecheck: 'not available',
+        build: 'not available',
+        test: 'not available',
+        lint: 'not available',
+        status: 'needs_review'
+      },
+      source: ['user_decision', 'ai_inference', 'needs_review']
     });
   }
 
-  return { history, logEntries };
+  const assumptionEntries = assumptionLog.map((assumption) => ({
+    ...assumption,
+    risk_categories: [...assumption.risk_categories],
+    review_categories: [...(assumption.review_categories ?? [])],
+    related_files: [...(assumption.related_files ?? [])]
+  }));
+
+  if (logEntries.length > 0 && assumptionEntries.length > 0) {
+    logEntries[0] = {
+      ...logEntries[0],
+      assumptionLog: assumptionEntries
+    };
+  }
+
+  return { history, logEntries, decisionIds, assumptionEntries };
 }
 
 function resolveSelectedChoice(
   answer: StartImplementationAnswer,
   question: PlanningQuestion
 ): { userChoice: string; outcome: string } | undefined {
-  if (answer.choiceType === 'A') {
+  if (answer.choiceType !== 'custom') {
+    const optionIndex = choiceTypeToIndex(answer.choiceType);
+    const option = question.options[optionIndex];
+    if (!option) {
+      return undefined;
+    }
     return {
-      userChoice: `Option A - ${question.optionA.label}`,
-      outcome: `${question.optionA.label} 방향으로 구현을 진행합니다.`
-    };
-  }
-
-  if (answer.choiceType === 'B') {
-    return {
-      userChoice: `Option B - ${question.optionB.label}`,
-      outcome: `${question.optionB.label} 방향으로 구현을 진행합니다.`
+      userChoice: `Option ${answer.choiceType} - ${option.label}`,
+      outcome: `${option.label} 방향으로 구현을 진행합니다.`
     };
   }
 
@@ -2013,24 +2344,17 @@ function buildSessionChoices(
       continue;
     }
 
-    if (answer.choiceType === 'A') {
+    if (answer.choiceType !== 'custom') {
+      const option = question.options[choiceTypeToIndex(answer.choiceType)];
+      if (!option) {
+        continue;
+      }
       choices.push({
         questionId: question.id,
         topic: question.topic,
-        choiceType: 'A',
-        selectedLabel: question.optionA.label,
-        userChoice: `Option A - ${question.optionA.label}`
-      });
-      continue;
-    }
-
-    if (answer.choiceType === 'B') {
-      choices.push({
-        questionId: question.id,
-        topic: question.topic,
-        choiceType: 'B',
-        selectedLabel: question.optionB.label,
-        userChoice: `Option B - ${question.optionB.label}`
+        choiceType: answer.choiceType,
+        selectedLabel: option.label,
+        userChoice: `Option ${answer.choiceType} - ${option.label}`
       });
       continue;
     }
@@ -2052,8 +2376,39 @@ function buildSessionChoices(
   return choices;
 }
 
-function summarizeOption(choice: 'A' | 'B', option: { label: string; pros: string[]; cons: string[] }): string {
+function summarizeOption(choice: string, option: { label: string; pros: string[]; cons: string[] }): string {
   return `${choice} - ${option.label} | 장점: ${option.pros.join(', ')} | 단점: ${option.cons.join(', ')}`;
+}
+
+function choiceLabelForIndex(index: number): 'A' | 'B' | 'C' | 'D' {
+  return (['A', 'B', 'C', 'D'][index] ?? 'D') as 'A' | 'B' | 'C' | 'D';
+}
+
+function choiceTypeToIndex(choiceType: 'A' | 'B' | 'C' | 'D'): number {
+  return choiceType.charCodeAt(0) - 'A'.charCodeAt(0);
+}
+
+function buildDecisionId(dateValue: string, title: string): string {
+  const date = new Date(dateValue);
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
+  return `D-${[
+    safeDate.getFullYear(),
+    padNumber(safeDate.getMonth() + 1),
+    padNumber(safeDate.getDate())
+  ].join('')}-${[padNumber(safeDate.getHours()), padNumber(safeDate.getMinutes()), padNumber(safeDate.getSeconds())].join('')}-${sanitizeDecisionTitle(title)}`;
+}
+
+function sanitizeDecisionTitle(title: string): string {
+  const normalized = title
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 36);
+  return normalized || 'decision';
+}
+
+function padNumber(value: number): string {
+  return String(value).padStart(2, '0');
 }
 
 function serializePersistedSession(session: PersistedAgentSession): PersistedAgentSession {
@@ -2065,11 +2420,20 @@ function serializePersistedSession(session: PersistedAgentSession): PersistedAge
     messages: session.messages.map((message) => ({
       ...message,
       planning: message.planning
-        ? {
+          ? {
             summary: message.planning.summary,
             assumptions: [...message.planning.assumptions],
+            assumption_log: message.planning.assumption_log?.map((assumption) => ({
+              ...assumption,
+              risk_categories: [...assumption.risk_categories]
+            })),
             questions: message.planning.questions.map((question) => ({
               ...question,
+              options: question.options.map((option) => ({
+                ...option,
+                pros: [...option.pros],
+                cons: [...option.cons]
+              })),
               optionA: {
                 ...question.optionA,
                 pros: [...question.optionA.pros],
@@ -2132,6 +2496,9 @@ function normalizeRelativePath(input: string): string {
   if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized)) {
     throw new Error(`절대 경로는 허용하지 않습니다: ${input}`);
   }
+  if (normalized.startsWith('~') || normalized.includes('$HOME') || normalized.includes('%USERPROFILE%')) {
+    throw new Error(`홈 디렉터리 경로는 허용하지 않습니다: ${input}`);
+  }
 
   const segments = normalized.split('/');
   if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) {
@@ -2139,6 +2506,21 @@ function normalizeRelativePath(input: string): string {
   }
 
   return segments.join('/');
+}
+
+function isSensitivePath(relativePath: string): boolean {
+  const normalized = relativePath.toLowerCase();
+  const fileName = normalized.split('/').pop() ?? normalized;
+  return fileName === '.env'
+    || fileName.startsWith('.env.')
+    || normalized.includes('/.env')
+    || normalized.includes('secret')
+    || normalized.includes('credential')
+    || normalized.includes('private-key')
+    || fileName.endsWith('.pem')
+    || fileName.endsWith('.key')
+    || fileName === 'id_rsa'
+    || fileName === 'id_dsa';
 }
 
 async function fileExists(uri: vscode.Uri): Promise<boolean> {

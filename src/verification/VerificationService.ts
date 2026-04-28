@@ -4,19 +4,26 @@ import * as vscode from 'vscode';
 export interface VerificationCommand {
   label: string;
   command: string;
+  available: boolean;
 }
 
 export interface VerificationResult {
   label: string;
   command: string;
+  available: boolean;
   ok: boolean;
   exitCode: number | null;
   timedOut: boolean;
   output: string;
+  status: 'passed' | 'failed' | 'timeout' | 'not_available';
 }
 
-const BUILD_SCRIPT_PRIORITY = ['compile', 'build', 'typecheck', 'check'] as const;
-const TEST_SCRIPT_PRIORITY = ['test'] as const;
+const PACKAGE_SCRIPT_ORDER = [
+  { label: 'typecheck', commandName: 'typecheck', command: 'run typecheck' },
+  { label: 'build', commandName: 'build', command: 'run build' },
+  { label: 'test', commandName: 'test', command: 'test' },
+  { label: 'lint', commandName: 'lint', command: 'run lint' }
+] as const;
 const MAX_OUTPUT_CHARACTERS = 12_000;
 const DEFAULT_TIMEOUT_MS = 90_000;
 const VERIFICATION_SEARCH_EXCLUDE = '**/{node_modules,.git,.venv,venv,__pycache__,dist,build,target,.next,.vendor}/**';
@@ -48,28 +55,16 @@ export class VerificationService {
     }
 
     const packageManager = await detectPackageManager(workspaceRoot);
-    const commands: VerificationCommand[] = [];
-
-    const buildScript = BUILD_SCRIPT_PRIORITY.find((scriptName) => typeof scripts[scriptName] === 'string');
-    if (buildScript) {
-      commands.push({
-        label: buildScript,
-        command: `${packageManager} run ${buildScript}`
-      });
-    }
-
-    const testScript = TEST_SCRIPT_PRIORITY.find((scriptName) => {
-      const script = scripts[scriptName];
-      return typeof script === 'string' && isSafeTestScript(script);
+    return PACKAGE_SCRIPT_ORDER.map((script) => {
+      const scriptBody = scripts[script.commandName];
+      const available = typeof scriptBody === 'string'
+        && (script.commandName !== 'test' || isSafeTestScript(scriptBody));
+      return {
+        label: script.label,
+        command: available ? `${packageManager} ${script.command}` : `${packageManager} ${script.command}`,
+        available
+      };
     });
-    if (testScript && !commands.some((command) => command.label === testScript)) {
-      commands.push({
-        label: testScript,
-        command: `${packageManager} run ${testScript}`
-      });
-    }
-
-    return commands;
   }
 
   private async detectFallbackCommands(workspaceRoot: vscode.Uri): Promise<VerificationCommand[]> {
@@ -82,7 +77,8 @@ export class VerificationService {
       if (pythonTarget) {
         commands.push({
           label: 'python -m py_compile',
-          command: `python -m py_compile "${toRelativeShellPath(workspaceRoot, pythonTarget)}"`
+          command: `python -m py_compile "${toRelativeShellPath(workspaceRoot, pythonTarget)}"`,
+          available: true
         });
       }
     }
@@ -91,7 +87,8 @@ export class VerificationService {
     if (goModules.length > 0) {
       commands.push({
         label: 'go build',
-        command: 'go build ./...'
+        command: 'go build ./...',
+        available: true
       });
     }
 
@@ -99,7 +96,8 @@ export class VerificationService {
     if (cargoTomlFiles.length > 0) {
       commands.push({
         label: 'cargo check',
-        command: 'cargo check'
+        command: 'cargo check',
+        available: true
       });
     }
 
@@ -110,7 +108,8 @@ export class VerificationService {
     const shellScripts = await this.findWorkspaceFiles(workspaceRoot, GENERIC_SCRIPT_GLOB, 5);
     return shellScripts.map((uri) => ({
       label: relativeBaseName(workspaceRoot, uri),
-      command: `sh "${toRelativeShellPath(workspaceRoot, uri)}"`
+      command: `sh "${toRelativeShellPath(workspaceRoot, uri)}"`,
+      available: true
     }));
   }
 
@@ -127,6 +126,19 @@ export class VerificationService {
     for (const command of commands) {
       if (abortSignal?.aborted) {
         throw createAbortError();
+      }
+      if (!command.available) {
+        results.push({
+          label: command.label,
+          command: command.command,
+          available: false,
+          ok: false,
+          exitCode: null,
+          timedOut: false,
+          output: 'not available',
+          status: 'not_available'
+        });
+        continue;
       }
       results.push(await this.runCommand(workspaceRoot.fsPath, command, abortSignal));
     }
@@ -218,10 +230,12 @@ export class VerificationService {
         finalize({
           label: command.label,
           command: command.command,
+          available: true,
           ok: !timedOut && code === 0,
           exitCode: code,
           timedOut,
-          output: output.trim()
+          output: output.trim(),
+          status: timedOut ? 'timeout' : code === 0 ? 'passed' : 'failed'
         });
       });
     });

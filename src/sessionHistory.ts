@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 
-import { PlanningQuestion } from './aiClient';
+import type { PlanningAssumption, PlanningQuestion } from './aiClient';
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -15,7 +15,7 @@ export type AgentSessionMessageType = 'text' | 'planning' | 'result' | 'status' 
 export interface AgentSessionChoice {
   questionId: string;
   topic: string;
-  choiceType: 'A' | 'B' | 'custom';
+  choiceType: 'A' | 'B' | 'C' | 'D' | 'custom';
   selectedLabel: string;
   userChoice: string;
 }
@@ -23,6 +23,7 @@ export interface AgentSessionChoice {
 export interface AgentSessionPlanningPayload {
   summary: string;
   assumptions: string[];
+  assumption_log?: PlanningAssumption[];
   questions: PlanningQuestion[];
   userChoices: AgentSessionChoice[];
 }
@@ -37,10 +38,12 @@ export interface AgentSessionResultPayload {
   verificationResults: Array<{
     label: string;
     command: string;
+    available?: boolean;
     ok: boolean;
     timedOut: boolean;
     exitCode: number | null;
     output: string;
+    status?: string;
   }>;
   autoRepairApplied: boolean;
   repairFailureMessage: string;
@@ -107,8 +110,17 @@ export class SessionHistoryService {
           ? {
               summary: message.planning.summary,
               assumptions: [...message.planning.assumptions],
+              assumption_log: message.planning.assumption_log?.map((assumption) => ({
+                ...assumption,
+                risk_categories: [...assumption.risk_categories]
+              })),
               questions: message.planning.questions.map((question) => ({
                 ...question,
+                options: question.options.map((option) => ({
+                  ...option,
+                  pros: [...option.pros],
+                  cons: [...option.cons]
+                })),
                 optionA: {
                   ...question.optionA,
                   pros: [...question.optionA.pros],
@@ -364,6 +376,11 @@ function normalizePlanningPayload(value: unknown): AgentSessionPlanningPayload |
 
   const questions = record.questions.filter(isPlanningQuestion).map((question) => ({
     ...question,
+    options: (Array.isArray(question.options) ? question.options : [question.optionA, question.optionB].filter(isDecisionOption)).map((option) => ({
+      ...option,
+      pros: [...option.pros],
+      cons: [...option.cons]
+    })),
     optionA: {
       ...question.optionA,
       pros: [...question.optionA.pros],
@@ -384,6 +401,12 @@ function normalizePlanningPayload(value: unknown): AgentSessionPlanningPayload |
   return {
     summary: record.summary,
     assumptions: record.assumptions.filter((item): item is string => typeof item === 'string'),
+    assumption_log: Array.isArray(record.assumption_log)
+      ? record.assumption_log.filter(isPlanningAssumption).map((assumption) => ({
+          ...assumption,
+          risk_categories: [...assumption.risk_categories]
+        }))
+      : undefined,
     questions,
     userChoices
   };
@@ -430,10 +453,12 @@ function normalizeResultPayload(value: unknown): AgentSessionResultPayload | und
         (result): result is {
           label: string;
           command: string;
+          available?: boolean;
           ok: boolean;
           timedOut: boolean;
           exitCode: number | null;
           output: string;
+          status?: string;
         } =>
           Boolean(result)
           && typeof result === 'object'
@@ -471,12 +496,47 @@ function isPlanningQuestion(value: unknown): value is PlanningQuestion {
   }
 
   const record = value as Record<string, unknown>;
+  const hasOptions = Array.isArray(record.options) && record.options.every((item) => isDecisionOption(item));
+  const hasLegacyOptions = isDecisionOption(record.optionA) && isDecisionOption(record.optionB);
   return typeof record.id === 'string'
     && (record.impact === 'HIGH' || record.impact === 'MEDIUM' || record.impact === 'LOW')
     && typeof record.topic === 'string'
     && typeof record.question === 'string'
-    && isDecisionOption(record.optionA)
-    && isDecisionOption(record.optionB);
+    && (hasOptions || hasLegacyOptions)
+    && (record.human_review_level === undefined
+      || record.human_review_level === 'REVIEW_REQUIRED'
+      || record.human_review_level === 'REVIEW_RECOMMENDED'
+      || record.human_review_level === 'AUTO_WITH_LOG')
+    && (record.review_categories === undefined || Array.isArray(record.review_categories))
+    && (record.related_files === undefined || Array.isArray(record.related_files))
+    && (record.target_files === undefined || Array.isArray(record.target_files))
+    && (record.can_auto_apply === undefined || typeof record.can_auto_apply === 'boolean')
+    && typeof record.reason === 'string'
+    && typeof record.default_if_skipped === 'string'
+    && typeof record.risk_if_wrong === 'string'
+    && Array.isArray(record.risk_categories)
+    && record.risk_categories.every((item) => typeof item === 'string');
+}
+
+function isPlanningAssumption(value: unknown): value is PlanningAssumption {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return typeof record.topic === 'string'
+    && typeof record.default_value === 'string'
+    && typeof record.reason === 'string'
+    && (record.human_review_level === undefined
+      || record.human_review_level === 'REVIEW_REQUIRED'
+      || record.human_review_level === 'REVIEW_RECOMMENDED'
+      || record.human_review_level === 'AUTO_WITH_LOG')
+    && (record.review_categories === undefined || Array.isArray(record.review_categories))
+    && Array.isArray(record.risk_categories)
+    && record.risk_categories.every((item) => typeof item === 'string')
+    && (record.related_files === undefined || Array.isArray(record.related_files))
+    && (record.can_auto_apply === undefined || typeof record.can_auto_apply === 'boolean')
+    && typeof record.source === 'string';
 }
 
 function isDecisionOption(value: unknown): value is PlanningQuestion['optionA'] {
@@ -500,7 +560,7 @@ function isAgentSessionChoice(value: unknown): value is AgentSessionChoice {
   const record = value as Record<string, unknown>;
   return typeof record.questionId === 'string'
     && typeof record.topic === 'string'
-    && (record.choiceType === 'A' || record.choiceType === 'B' || record.choiceType === 'custom')
+    && (record.choiceType === 'A' || record.choiceType === 'B' || record.choiceType === 'C' || record.choiceType === 'D' || record.choiceType === 'custom')
     && typeof record.selectedLabel === 'string'
     && typeof record.userChoice === 'string';
 }

@@ -3,27 +3,81 @@ import { DecisionLogEntry } from './logManager';
 
 export type AIProvider = 'anthropic' | 'google' | 'openai' | 'deepseek';
 export type QuestionFilterLevel = 'high' | 'medium' | 'low';
+export type QuestionSensitivity = 'flow' | 'balanced' | 'review' | 'strict';
 export type PlanningImpact = 'HIGH' | 'MEDIUM' | 'LOW';
+export type TraceabilityMode = 'basic' | 'strict';
+export type HumanReviewLevel = 'REVIEW_REQUIRED' | 'REVIEW_RECOMMENDED' | 'AUTO_WITH_LOG';
+export type RiskCategory =
+  | 'reversibility'
+  | 'security'
+  | 'data_loss'
+  | 'public_contract'
+  | 'user_intent'
+  | 'code_evidence_lack'
+  | 'ripple_effect'
+  | 'learning_value';
 
 export interface DecisionOption { label: string; pros: string[]; cons: string[]; }
-export interface DecisionHistoryEntry { title: string; decisionPoint: string; userChoice: string; outcome: string; }
+export interface DecisionHistoryEntry {
+  id?: string;
+  title: string;
+  decisionPoint: string;
+  userChoice: string;
+  outcome: string;
+  humanReviewLevel?: HumanReviewLevel;
+  reviewCategories?: string[];
+  reason?: string;
+  leverageScore?: number;
+  riskCategories?: RiskCategory[];
+  defaultIfSkipped?: string;
+  riskIfWrong?: string;
+  relatedFiles?: string[];
+  canAutoApply?: boolean;
+  source?: string[];
+}
+export interface PlanningAssumption {
+  topic: string;
+  default_value: string;
+  reason: string;
+  human_review_level?: HumanReviewLevel;
+  review_categories?: string[];
+  risk_categories: RiskCategory[];
+  related_files?: string[];
+  can_auto_apply?: boolean;
+  leverage_score?: number;
+  skipped_because?: string;
+  source: 'ai_inference' | 'code_evidence' | 'user_decision' | 'needs_review';
+}
 export interface PlanningQuestion {
   id: string;
   impact: PlanningImpact;
   topic: string;
   question: string;
+  options: DecisionOption[];
   optionA: DecisionOption;
   optionB: DecisionOption;
+  human_review_level?: HumanReviewLevel;
+  review_categories?: string[];
+  leverage_score?: number;
+  reason: string;
+  default_if_skipped: string;
+  risk_if_wrong: string;
+  risk_categories: RiskCategory[];
+  decision_topic?: string;
+  related_files?: string[];
+  target_files?: string[];
+  can_auto_apply?: boolean;
+  conflict_with?: string;
 }
 export interface PlanningResponse {
   summary: string;
   assumptions: string[];
+  assumption_log: PlanningAssumption[];
   questions: PlanningQuestion[];
 }
 export interface ImplementationFile { path: string; description: string; content: string; }
 export interface ImplementationResponse { currentWork: string; summary: string; files: ImplementationFile[]; runInstructions: string[]; }
 export interface TutorialGenerationContext { projectGuideContent?: string; lastImplementationSummary?: string; }
-
 interface ProviderSettings { apiKeySetting: string; modelSetting: string; defaultModel: string; displayName: string; }
 interface AnthropicTextBlock { type?: string; text?: string; }
 interface AnthropicApiResponse { content?: AnthropicTextBlock[]; error?: { message?: string }; }
@@ -54,34 +108,78 @@ const MODEL_OPTIONS: Record<AIProvider, string[]> = {
 
 const PLANNING_SYSTEM_PROMPT = [
   'You are a planning agent for Debtcrasher, a VS Code development agent.',
-  'Given a development request, identify all explicit high-leverage decisions the developer should make before implementation starts.',
+  'Your job is to build a Human Review Gate, not to score importance as if AI had objective authority.',
   '',
   'Authority order:',
   '1. The current user request',
   '2. AGENT.md and other project guide files',
   '3. Existing workspace files and code patterns',
   '',
-  'Planning rules:',
-  '1. Never assume features and ask about them. Only ask about decisions directly implied by the request.',
-  '2. Before adding any question, verify the topic is not already answered in AGENT.md Confirmed Decisions or Do not ask again.',
-  '3. If a decision is already covered even partially, do not ask it again. Reuse the existing decision.',
-  '4. Every surfaced question must be coarse-grained and architecturally meaningful.',
-  '5. Every non-surfaced decision must go into assumptions as an autonomous default.',
-  '6. questions must contain at most 3 items.',
-  '7. Use Korean for all natural-language fields.',
+  'Human Review Gate principles:',
+  '1. `human_review_level` is a workflow policy, not an objective ground-truth label.',
+  '2. `REVIEW_REQUIRED` must always be surfaced to the user.',
+  '3. `REVIEW_RECOMMENDED` depends on `question_sensitivity`.',
+  '4. `AUTO_WITH_LOG` should be auto-applied and written to the assumption log.',
+  '5. Do not ask about implementation details that the codebase can safely default.',
+  '6. When the user answer changes public contracts, data safety, security, or cost, escalate to `REVIEW_REQUIRED`.',
+  '7. Do not surface arbitrary brainstorming questions.',
+  '8. Use Korean for all natural-language fields.',
+  '',
+  'Escalation triggers:',
+  '- Data loss or irreversible change: delete, overwrite, reset, migrate, truncate, purge.',
+  '- Security / auth / permission / secret: API key, token, credential, password, private key.',
+  '- Public contract change: API, endpoint, schema, response format, config key, file format, CLI option.',
+  '- Cost: paid API, billing, quota, usage cost, subscription.',
+  '- Workspace-outside file access or sensitive data handling.',
+  '',
+  'Review category hints:',
+  '- Risk Impact',
+  '- Architecture Impact',
+  '- Tradeoff Point',
+  '- Reversibility Cost',
+  '- User Intent / Stakeholder Judgment',
+  '- Learning / Reflection Value',
   '',
   'Return JSON only with this schema:',
   '{',
   '  "summary": "string",',
-  '  "assumptions": ["string"],',
+  '  "assumptions": ["legacy short assumption strings"],',
+  '  "assumption_log": [',
+  '    {',
+  '      "topic": "string",',
+  '      "default_value": "string",',
+  '      "reason": "string",',
+  '      "human_review_level": "REVIEW_REQUIRED | REVIEW_RECOMMENDED | AUTO_WITH_LOG",',
+  '      "review_categories": ["string"],',
+  '      "risk_categories": ["reversibility"],',
+  '      "related_files": ["relative/path/or/module"],',
+  '      "can_auto_apply": true,',
+  '      "skipped_because": "string",',
+  '      "source": "ai_inference | code_evidence | user_decision | needs_review"',
+  '    }',
+  '  ],',
   '  "questions": [',
   '    {',
   '      "id": "q1",',
   '      "impact": "HIGH | MEDIUM | LOW",',
   '      "topic": "string",',
   '      "question": "string",',
+  '      "options": [',
+  '        {"label": "string", "pros": ["string"], "cons": ["string"]},',
+  '        {"label": "string", "pros": ["string"], "cons": ["string"]}',
+  '      ],',
   '      "optionA": {"label": "string", "pros": ["string"], "cons": ["string"]},',
-  '      "optionB": {"label": "string", "pros": ["string"], "cons": ["string"]}',
+  '      "optionB": {"label": "string", "pros": ["string"], "cons": ["string"]},',
+  '      "human_review_level": "REVIEW_REQUIRED | REVIEW_RECOMMENDED | AUTO_WITH_LOG",',
+  '      "review_categories": ["string"],',
+  '      "risk_categories": ["reversibility", "learning_value"],',
+  '      "reason": "string",',
+  '      "default_if_skipped": "string",',
+  '      "risk_if_wrong": "string",',
+  '      "related_files": ["relative/path/or/module"],',
+  '      "can_auto_apply": false,',
+  '      "decision_topic": "string",',
+  '      "conflict_with": "optional existing decision id or title"',
   '    }',
   '  ]',
   '}'
@@ -205,21 +303,28 @@ export class AIClient {
     referenceContext = '',
     patternContext = '',
     resumeContext = '',
+    decisionMemory: DecisionLogEntry[] = [],
     abortSignal?: AbortSignal
   ): Promise<PlanningResponse> {
-    const systemPrompt = `${PLANNING_SYSTEM_PROMPT}\n\n${PLANNING_TEMPLATE_LIBRARY}\n\n${buildPlanningQuestionFilterPrompt(await this.getQuestionFilterLevel())}`;
+    const questionSensitivity = await this.getQuestionSensitivity();
+    const systemPrompt = `${PLANNING_SYSTEM_PROMPT}\n\n${PLANNING_TEMPLATE_LIBRARY}\n\n${buildPlanningQuestionFilterPrompt(questionSensitivity)}`;
     const userPrompt = buildPlanningUserPrompt(task, workspaceContext, referenceContext, patternContext, resumeContext);
-    const parsed = parseJsonResponse<PlanningResponse>(await this.sendMessage(systemPrompt, userPrompt, 1800, abortSignal));
+    const rawResponse = await this.sendMessage(systemPrompt, userPrompt, 2200, abortSignal);
+    let parsed: PlanningResponse;
 
-    if (!isPlanningResponse(parsed)) {
-      throw new Error('AI 응답 형식이 Debtcrasher planning JSON과 맞지 않습니다.');
+    try {
+      parsed = parseJsonResponse<PlanningResponse>(rawResponse);
+    } catch (error) {
+      console.warn('[Debtcrasher] Planning JSON parse failed; using fallback question.', error);
+      return createFallbackPlanningResponse(task);
     }
 
-    return {
-      summary: parsed.summary.trim(),
-      assumptions: parsed.assumptions.map((item) => item.trim()).filter(Boolean),
-      questions: parsed.questions.slice(0, 3)
-    };
+    if (!isPlanningResponse(parsed)) {
+      console.warn('[Debtcrasher] Planning schema mismatch; using fallback question.');
+      return createFallbackPlanningResponse(task);
+    }
+
+    return normalizePlanningResponse(parsed, task, decisionMemory, questionSensitivity);
   }
 
   public async generateImplementation(
@@ -322,8 +427,10 @@ export class AIClient {
 
   public async generateTutorial(
     entries: DecisionLogEntry[],
-    context: TutorialGenerationContext = {}
+    context: TutorialGenerationContext = {},
+    options: { traceabilityMode?: TraceabilityMode } = {}
   ): Promise<string> {
+    const strictMode = options.traceabilityMode === 'strict';
     const userPrompt = [
       '## 프로젝트 현재 상태',
       '### AGENT.md',
@@ -347,12 +454,24 @@ export class AIClient {
         ''
       ])
     ].join('\n');
-    const markdown = await this.sendMessage(
-      STEP_SYSTEM_PROMPT,
+    const groundingPrompt = [
       userPrompt,
+      '',
+      '## Required grounding metadata for validator',
+      ...entries.flatMap((entry) => [
+        `Decision ID: ${entry.id}`,
+        `Related Files: ${(entry.relatedFiles ?? []).join(', ') || 'needs_review'}`,
+        `Validation Result: ${formatDecisionValidationForPrompt(entry)}`,
+        `Risk Categories: ${(entry.riskCategories ?? []).join(', ') || 'needs_review'}`,
+        `Source: ${(entry.source ?? []).join(', ') || 'needs_review'}`,
+        ''
+      ])
+    ].join('\n');
+    const markdown = await this.sendMessage(
+      buildTutorialSystemPrompt(strictMode),
+      groundingPrompt,
       getTutorialTokenBudget(entries.length)
     );
-    validateTutorialMarkdown(markdown, entries.length);
     return markdown;
   }
 
@@ -377,6 +496,16 @@ export class AIClient {
   public async getQuestionFilterLevel(): Promise<QuestionFilterLevel> {
     const configured = vscode.workspace.getConfiguration().get<string>('aiStepDev.questionFilterLevel', 'medium');
     return isQuestionFilterLevel(configured) ? configured : 'medium';
+  }
+
+  public async getQuestionSensitivity(): Promise<QuestionSensitivity> {
+    const configured = this.getConfiguration().get<string>('questionSensitivity', 'balanced');
+    return isQuestionSensitivity(configured) ? configured : 'balanced';
+  }
+
+  public getTraceabilityMode(): TraceabilityMode {
+    const configured = this.getConfiguration().get<string>('traceabilityMode', 'basic');
+    return isTraceabilityMode(configured) ? configured : 'basic';
   }
 
   public async saveQuestionFilterLevel(level: QuestionFilterLevel): Promise<void> {
@@ -552,13 +681,16 @@ function buildPlanningUserPrompt(
     resumeContext.trim() || '- none',
     '',
     'Requirements:',
-    '- Identify all decisions the user needs to make before development starts.',
-    '- Classify each candidate decision as HIGH / MEDIUM / LOW.',
-    '- Surface only questions that meet the active question filter threshold.',
-    '- Ask about at most 3 decisions.',
-    '- Every other decision must become an assumption.',
+    '- Identify the planning decisions the user needs to review before development starts.',
+    '- Classify each candidate as REVIEW_REQUIRED, REVIEW_RECOMMENDED, or AUTO_WITH_LOG.',
+    '- Surface every REVIEW_REQUIRED item.',
+    '- Use question_sensitivity to decide which REVIEW_RECOMMENDED items are shown.',
+    '- AUTO_WITH_LOG items must not be asked unless the mode is strict.',
+    '- Every non-surfaced item must become an assumption_log entry with a default value and source.',
+    '- Include human_review_level, review_categories, reason, default_if_skipped, risk_if_wrong, risk_categories, related_files, and can_auto_apply on every question.',
+    '- `leverage_score` may be used only as an internal sorting aid; do not make it a user-facing requirement.',
     '- Never include a question about a feature not mentioned in the request.',
-    '- Never include a question already answered in AGENT.md.',
+    '- Never include a question already answered in AGENT.md or DECISIONS.md unless you explicitly mark an existing-decision conflict.',
     '- If previous session context already contains an answered decision, reuse it and do not ask again.',
     '- If historical patterns suggest a repeated preference, use that only to rank questions and shape option framing. Do not override the current request.',
     '- Do not ask about naming, styling minutiae, or obvious implementation details.',
@@ -596,10 +728,361 @@ function parseJsonResponse<T>(text: string): T {
   throw new Error('AI가 유효한 JSON 응답을 반환하지 않았습니다.');
 }
 
+function createFallbackPlanningResponse(task: string): PlanningResponse {
+  const options: DecisionOption[] = [
+    {
+      label: '가장 단순한 MVP 방식',
+      pros: ['빠르게 구현하고 검증할 수 있습니다.'],
+      cons: ['이후 확장 시 구조를 다시 잡아야 할 수 있습니다.']
+    },
+    {
+      label: '확장성을 고려한 구조',
+      pros: ['후속 기능 추가와 분리가 쉬워집니다.'],
+      cons: ['초기 구현량이 늘어날 수 있습니다.']
+    },
+    {
+      label: '기존 코드 스타일을 최대한 따르는 방식',
+      pros: ['현재 코드베이스와 충돌이 적고 리뷰가 쉽습니다.'],
+      cons: ['새 요구에 최적인 구조가 아닐 수 있습니다.']
+    }
+  ];
+
+  const question: PlanningQuestion = {
+    id: 'fallback-q1',
+    impact: 'HIGH',
+    topic: '구현 방향',
+    question: '이 작업에서 가장 중요한 구현 방향을 선택해주세요.',
+    options,
+    optionA: options[0],
+    optionB: options[1],
+    human_review_level: 'REVIEW_REQUIRED',
+    review_categories: ['Architecture Impact', 'Reversibility Cost', 'Tradeoff Point'],
+    leverage_score: 4,
+    reason: 'AI planning 응답을 JSON으로 해석하지 못해 사용자가 가장 중요한 구현 방향만 선택하도록 축소했습니다.',
+    default_if_skipped: '기존 코드 스타일을 최대한 따르는 방식',
+    risk_if_wrong: '초기 구현 방향이 기대한 속도, 확장성, 기존 코드 일관성과 어긋날 수 있습니다.',
+    risk_categories: ['user_intent', 'code_evidence_lack', 'learning_value'],
+    decision_topic: 'implementation_direction',
+    related_files: [],
+    can_auto_apply: false
+  };
+
+  return {
+    summary: task.trim() || '요청된 작업',
+    assumptions: [],
+    assumption_log: [],
+    questions: [question]
+  };
+}
+
+function normalizePlanningResponse(
+  parsed: PlanningResponse,
+  task: string,
+  decisionMemory: DecisionLogEntry[],
+  questionSensitivity: QuestionSensitivity
+): PlanningResponse {
+  const normalizedAssumptions = parsed.assumption_log
+    .map((assumption) => normalizePlanningAssumption(assumption))
+    .filter((assumption) => assumption.topic || assumption.default_value);
+  const candidateQuestions = parsed.questions.map((question, index) => normalizePlanningQuestion(question, index));
+  const selectedQuestions: PlanningQuestion[] = [];
+  const droppedAssumptions: PlanningAssumption[] = [];
+  const duplicateAssumptions: PlanningAssumption[] = [];
+
+  for (const question of candidateQuestions) {
+    const duplicate = findDuplicateDecision(question, decisionMemory);
+    if (!duplicate) {
+      if (shouldAskQuestion(question, questionSensitivity)) {
+        selectedQuestions.push(question);
+      } else {
+        droppedAssumptions.push(questionToAssumption(question, questionSensitivity, '질문 민감도 또는 자동 처리 정책 때문에 사용자에게 묻지 않고 기본값으로 처리합니다.'));
+      }
+      continue;
+    }
+
+    if (question.conflict_with || question.reason.includes('기존 결정과 충돌 가능성')) {
+      if (shouldAskQuestion(question, questionSensitivity)) {
+        selectedQuestions.push({
+          ...question,
+          reason: question.reason.includes('기존 결정과 충돌 가능성')
+            ? question.reason
+            : `기존 결정과 충돌 가능성: ${duplicate.title}. ${question.reason}`
+        });
+      } else {
+        droppedAssumptions.push(questionToAssumption(question, questionSensitivity, `기존 결정(${duplicate.title})과 충돌 가능성이 있어 기본값으로 기록합니다.`));
+      }
+      continue;
+    }
+
+    duplicateAssumptions.push(questionToAssumption(
+      question,
+      questionSensitivity,
+      `이미 답한 결정(${duplicate.title})과 중복되어 기존 결정을 기본값으로 재사용합니다.`
+    ));
+  }
+
+  const assumptionLog = [...normalizedAssumptions, ...duplicateAssumptions, ...droppedAssumptions];
+  const assumptionLines = Array.from(new Set([
+    ...parsed.assumptions.map((item) => item.trim()).filter(Boolean),
+    ...assumptionLog.map((assumption) =>
+      `${assumption.topic}: ${assumption.default_value} (${assumption.reason})`
+    )
+  ]));
+
+  return {
+    summary: parsed.summary.trim() || task.trim() || '요청된 작업',
+    assumptions: assumptionLines,
+    assumption_log: assumptionLog,
+    questions: prioritizePlanningQuestions(selectedQuestions, questionSensitivity)
+  };
+}
+
+function normalizePlanningAssumption(assumption: PlanningAssumption): PlanningAssumption {
+  const humanReviewLevel = normalizeHumanReviewLevel(assumption.human_review_level ?? 'AUTO_WITH_LOG');
+  return {
+    topic: assumption.topic.trim(),
+    default_value: assumption.default_value.trim(),
+    reason: assumption.reason.trim() || 'AI가 코드 맥락을 근거로 기본값을 선택했습니다.',
+    human_review_level: humanReviewLevel,
+    review_categories: normalizeReviewCategories(assumption.review_categories),
+    risk_categories: normalizeRiskCategories(assumption.risk_categories),
+    related_files: Array.isArray(assumption.related_files)
+      ? assumption.related_files.map((item) => item.trim()).filter(Boolean)
+      : [],
+    can_auto_apply: Boolean(assumption.can_auto_apply),
+    skipped_because: assumption.skipped_because?.trim(),
+    source: assumption.source
+  };
+}
+
+function ensureMinimumOptions(options: DecisionOption[]): DecisionOption[] {
+  if (options.length >= 2) {
+    return options;
+  }
+  return [
+    ...options,
+    {
+      label: '기존 코드 스타일을 따르는 기본값',
+      pros: ['현재 코드베이스와 충돌이 적습니다.'],
+      cons: ['사용자 의도와 다르면 후속 수정이 필요합니다.']
+    },
+    {
+      label: '최소 구현 기본값',
+      pros: ['빠르게 구현하고 검증할 수 있습니다.'],
+      cons: ['확장 요구가 생기면 구조 보강이 필요합니다.']
+    }
+  ].slice(0, 2);
+}
+
+function normalizePlanningQuestion(question: PlanningQuestion, index: number): PlanningQuestion {
+  const rawOptions = Array.isArray(question.options) ? question.options : [];
+  const options = rawOptions
+    .map((option) => ({
+      label: option.label.trim(),
+      pros: option.pros.map((item) => item.trim()).filter(Boolean),
+      cons: option.cons.map((item) => item.trim()).filter(Boolean)
+    }))
+    .filter((option) => option.label);
+  const fallbackOptions = [question.optionA, question.optionB].filter(isDecisionOption);
+  const normalizedOptions = ensureMinimumOptions(options.length >= 2 ? options : fallbackOptions);
+  const humanReviewLevel = normalizeHumanReviewLevel(question.human_review_level ?? deriveHumanReviewLevel(question));
+  const leverageScore = normalizeLeverageScore(question.leverage_score, humanReviewLevel, question.risk_categories);
+  const reviewCategories = normalizeReviewCategories(question.review_categories);
+  const relatedFiles = Array.isArray(question.related_files)
+    ? question.related_files.map((item) => item.trim()).filter(Boolean)
+    : Array.isArray(question.target_files)
+      ? question.target_files.map((item) => item.trim()).filter(Boolean)
+      : [];
+
+  return {
+    ...question,
+    id: question.id.trim() || `q${index + 1}`,
+    impact: leverageToImpact(leverageScore, question.risk_categories),
+    topic: question.topic.trim() || question.decision_topic?.trim() || `판단 ${index + 1}`,
+    question: question.question.trim(),
+    options: normalizedOptions.slice(0, 4),
+    optionA: normalizedOptions[0],
+    optionB: normalizedOptions[1],
+    human_review_level: humanReviewLevel,
+    review_categories: reviewCategories,
+    leverage_score: leverageScore,
+    reason: question.reason.trim(),
+    default_if_skipped: question.default_if_skipped.trim(),
+    risk_if_wrong: question.risk_if_wrong.trim(),
+    risk_categories: normalizeRiskCategories(question.risk_categories),
+    decision_topic: question.decision_topic?.trim() || question.topic.trim(),
+    related_files: relatedFiles,
+    target_files: relatedFiles,
+    can_auto_apply: Boolean(question.can_auto_apply) || humanReviewLevel === 'AUTO_WITH_LOG',
+    conflict_with: question.conflict_with?.trim()
+  };
+}
+
+function prioritizePlanningQuestions(questions: PlanningQuestion[], sensitivity: QuestionSensitivity): PlanningQuestion[] {
+  const selected = questions.filter((question) => shouldAskQuestion(question, sensitivity));
+  return [...selected].sort((left, right) => comparePlanningQuestions(left, right));
+}
+
+function shouldAskQuestion(question: PlanningQuestion, sensitivity: QuestionSensitivity): boolean {
+  const level = normalizeHumanReviewLevel(question.human_review_level ?? deriveHumanReviewLevel(question));
+  if (sensitivity === 'strict') {
+    return true;
+  }
+  if (level === 'REVIEW_REQUIRED') {
+    return true;
+  }
+  if (level === 'AUTO_WITH_LOG') {
+    return false;
+  }
+  if (sensitivity === 'flow') {
+    return false;
+  }
+  if (sensitivity === 'balanced') {
+    return isPriorityRisk(question) || hasStrongReviewSignal(question);
+  }
+  return true;
+}
+
+function hasStrongReviewSignal(question: PlanningQuestion): boolean {
+  return (question.review_categories ?? []).some((category) => {
+    const normalized = category.toLowerCase();
+    return normalized.includes('risk impact')
+      || normalized.includes('architecture')
+      || normalized.includes('reversibility')
+      || normalized.includes('stakeholder')
+      || normalized.includes('tradeoff');
+  }) || (question.leverage_score ?? 0) >= 4;
+}
+
+function comparePlanningQuestions(left: PlanningQuestion, right: PlanningQuestion): number {
+  const levelOrder: Record<HumanReviewLevel, number> = {
+    REVIEW_REQUIRED: 0,
+    REVIEW_RECOMMENDED: 1,
+    AUTO_WITH_LOG: 2
+  };
+  const leftLevel = normalizeHumanReviewLevel(left.human_review_level ?? deriveHumanReviewLevel(left));
+  const rightLevel = normalizeHumanReviewLevel(right.human_review_level ?? deriveHumanReviewLevel(right));
+  const levelDelta = levelOrder[leftLevel] - levelOrder[rightLevel];
+  if (levelDelta !== 0) {
+    return levelDelta;
+  }
+  const scoreDelta = (right.leverage_score ?? 0) - (left.leverage_score ?? 0);
+  if (scoreDelta !== 0) {
+    return scoreDelta;
+  }
+  return left.topic.localeCompare(right.topic);
+}
+
+function questionToAssumption(question: PlanningQuestion, sensitivity: QuestionSensitivity, reason: string): PlanningAssumption {
+  return {
+    topic: question.decision_topic || question.topic,
+    default_value: question.default_if_skipped || question.options[0]?.label || '기존 코드 스타일을 따릅니다.',
+    human_review_level: question.human_review_level,
+    review_categories: [...(question.review_categories ?? [])],
+    reason,
+    risk_categories: [...question.risk_categories],
+    related_files: [...(question.related_files ?? question.target_files ?? [])],
+    can_auto_apply: Boolean(question.can_auto_apply) || sensitivity === 'flow' || question.human_review_level === 'AUTO_WITH_LOG',
+    skipped_because: reason,
+    source: 'ai_inference'
+  };
+}
+
+function findDuplicateDecision(question: PlanningQuestion, decisionMemory: DecisionLogEntry[]): DecisionLogEntry | undefined {
+  for (const entry of decisionMemory) {
+    const sameRiskCategory = question.risk_categories.some((category) => entry.riskCategories?.includes(category));
+    const sameTarget = hasOverlappingPathOrModule(question.related_files ?? question.target_files ?? [], entry.relatedFiles ?? []);
+    const sameDecisionTopic = isSameDecisionTopic(question, entry);
+    const overlapCount = [sameRiskCategory, sameTarget, sameDecisionTopic].filter(Boolean).length;
+    if (overlapCount >= 2) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+function hasOverlappingPathOrModule(left: string[], right: string[]): boolean {
+  const normalizedRight = right.map(normalizeMemoryToken).filter(Boolean);
+  return left
+    .map(normalizeMemoryToken)
+    .filter(Boolean)
+    .some((leftItem) => normalizedRight.some((rightItem) => leftItem === rightItem || leftItem.includes(rightItem) || rightItem.includes(leftItem)));
+}
+
+function isSameDecisionTopic(question: PlanningQuestion, entry: DecisionLogEntry): boolean {
+  const topic = normalizeMemoryToken(question.decision_topic || question.topic);
+  if (!topic) {
+    return false;
+  }
+  const entryTopic = normalizeMemoryToken(`${entry.title} ${entry.question}`);
+  return entryTopic.includes(topic) || topic.includes(entryTopic);
+}
+
+function normalizeMemoryToken(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9가-힣/_-]+/gi, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function isPriorityRisk(question: PlanningQuestion): boolean {
+  const categories = question.risk_categories;
+  const text = `${question.question} ${question.reason} ${question.risk_if_wrong}`.toLowerCase();
+  return categories.includes('security')
+    || categories.includes('data_loss')
+    || categories.includes('public_contract')
+    || text.includes('비용')
+    || text.includes('유료')
+    || text.includes('paid api')
+    || text.includes('cost');
+}
+
+function normalizeRiskCategories(categories: RiskCategory[]): RiskCategory[] {
+  return Array.from(new Set(categories.filter(isRiskCategory)));
+}
+
+function normalizeReviewCategories(categories: string[] | undefined): string[] {
+  return Array.from(new Set((Array.isArray(categories) ? categories : []).map((item) => item.trim()).filter(Boolean)));
+}
+
+function normalizeHumanReviewLevel(value: unknown): HumanReviewLevel {
+  return value === 'REVIEW_REQUIRED' || value === 'REVIEW_RECOMMENDED' || value === 'AUTO_WITH_LOG'
+    ? value
+    : 'AUTO_WITH_LOG';
+}
+
+function deriveHumanReviewLevel(question: Pick<PlanningQuestion, 'risk_categories' | 'reason' | 'risk_if_wrong' | 'review_categories' | 'leverage_score'>): HumanReviewLevel {
+  const text = `${question.reason} ${question.risk_if_wrong}`.toLowerCase();
+  if (question.risk_categories.includes('security') || question.risk_categories.includes('data_loss') || question.risk_categories.includes('public_contract') || text.includes('비용') || text.includes('유료')) {
+    return 'REVIEW_REQUIRED';
+  }
+  if ((question.review_categories || []).some((category) => /architecture|reversibility|stakeholder|risk impact/i.test(category))) {
+    return 'REVIEW_RECOMMENDED';
+  }
+  return 'AUTO_WITH_LOG';
+}
+
+function normalizeLeverageScore(score: number | undefined, humanReviewLevel: HumanReviewLevel, categories: RiskCategory[]): number {
+  if (Number.isFinite(score)) {
+    return Math.max(0, Math.min(5, Math.round(score as number)));
+  }
+  const base = humanReviewLevel === 'REVIEW_REQUIRED' ? 5 : humanReviewLevel === 'REVIEW_RECOMMENDED' ? 3 : 1;
+  return categories.includes('security') || categories.includes('data_loss') || categories.includes('public_contract') ? Math.max(base, 5) : base;
+}
+
+function leverageToImpact(score: number, categories: RiskCategory[]): PlanningImpact {
+  if (categories.includes('security') || categories.includes('data_loss') || categories.includes('public_contract') || score >= 4) {
+    return 'HIGH';
+  }
+  if (score >= 2) {
+    return 'MEDIUM';
+  }
+  return 'LOW';
+}
+
 function isPlanningResponse(value: unknown): value is PlanningResponse {
   return isRecord(value)
     && typeof value.summary === 'string'
     && isStringArray(value.assumptions)
+    && Array.isArray(value.assumption_log)
+    && value.assumption_log.every((assumption) => isPlanningAssumption(assumption))
     && Array.isArray(value.questions)
     && value.questions.every((question) => isPlanningQuestion(question));
 }
@@ -608,14 +1091,50 @@ function isDecisionOption(value: unknown): value is DecisionOption {
   return isRecord(value) && typeof value.label === 'string' && isStringArray(value.pros) && isStringArray(value.cons);
 }
 
+function isPlanningAssumption(value: unknown): value is PlanningAssumption {
+  return isRecord(value)
+    && typeof value.topic === 'string'
+    && typeof value.default_value === 'string'
+    && typeof value.reason === 'string'
+    && (value.human_review_level === 'REVIEW_REQUIRED'
+      || value.human_review_level === 'REVIEW_RECOMMENDED'
+      || value.human_review_level === 'AUTO_WITH_LOG')
+    && Array.isArray(value.review_categories)
+    && Array.isArray(value.risk_categories)
+    && value.risk_categories.every((category) => isRiskCategory(category))
+    && Array.isArray(value.related_files)
+    && typeof value.can_auto_apply === 'boolean'
+    && (value.source === 'ai_inference'
+      || value.source === 'code_evidence'
+      || value.source === 'user_decision'
+      || value.source === 'needs_review');
+}
+
 function isPlanningQuestion(value: unknown): value is PlanningQuestion {
+  const hasOptions = isRecord(value)
+    && Array.isArray(value.options)
+    && value.options.every((option) => isDecisionOption(option));
+  const hasLegacyOptions = isRecord(value)
+    && isDecisionOption(value.optionA)
+    && isDecisionOption(value.optionB);
+
   return isRecord(value)
     && typeof value.id === 'string'
     && isPlanningImpact(value.impact)
     && typeof value.topic === 'string'
     && typeof value.question === 'string'
-    && isDecisionOption(value.optionA)
-    && isDecisionOption(value.optionB);
+    && (hasOptions || hasLegacyOptions)
+    && (value.human_review_level === 'REVIEW_REQUIRED'
+      || value.human_review_level === 'REVIEW_RECOMMENDED'
+      || value.human_review_level === 'AUTO_WITH_LOG')
+    && Array.isArray(value.review_categories)
+    && typeof value.reason === 'string'
+    && typeof value.default_if_skipped === 'string'
+    && typeof value.risk_if_wrong === 'string'
+    && Array.isArray(value.risk_categories)
+    && value.risk_categories.every((category) => isRiskCategory(category))
+    && Array.isArray(value.related_files)
+    && typeof value.can_auto_apply === 'boolean';
 }
 
 function isImplementationResponse(value: unknown): value is ImplementationResponse {
@@ -629,7 +1148,19 @@ function isImplementationFile(value: unknown): value is ImplementationFile {
 function isStringArray(value: unknown): value is string[] { return Array.isArray(value) && value.every((item) => typeof item === 'string'); }
 function isProvider(value: string): value is AIProvider { return value === 'anthropic' || value === 'google' || value === 'openai' || value === 'deepseek'; }
 function isQuestionFilterLevel(value: string): value is QuestionFilterLevel { return value === 'high' || value === 'medium' || value === 'low'; }
+function isQuestionSensitivity(value: string): value is QuestionSensitivity { return value === 'flow' || value === 'balanced' || value === 'review' || value === 'strict'; }
 function isPlanningImpact(value: unknown): value is PlanningImpact { return value === 'HIGH' || value === 'MEDIUM' || value === 'LOW'; }
+function isTraceabilityMode(value: unknown): value is TraceabilityMode { return value === 'basic' || value === 'strict'; }
+function isRiskCategory(value: unknown): value is RiskCategory {
+  return value === 'reversibility'
+    || value === 'security'
+    || value === 'data_loss'
+    || value === 'public_contract'
+    || value === 'user_intent'
+    || value === 'code_evidence_lack'
+    || value === 'ripple_effect'
+    || value === 'learning_value';
+}
 function isRecord(value: unknown): value is Record<string, any> { return typeof value === 'object' && value !== null; }
 function getSecretStorageKey(provider: AIProvider): string { return `debtcrasher.${provider}.apiKey`; }
 
@@ -641,23 +1172,28 @@ function getModelOptions(provider: AIProvider, currentModel: string): string[] {
   return options;
 }
 
-function buildPlanningQuestionFilterPrompt(level: QuestionFilterLevel): string {
-  const levelInstruction = level === 'high'
-    ? 'Question Filter: HIGH only. Only ask about tech stack, platform, or architectural decisions that cannot be reversed without significant rewriting. Everything else: implement with a sensible default.'
-    : level === 'medium'
-      ? 'Question Filter: HIGH + MEDIUM. Ask about architecture and UX scope decisions. Skip implementation details.'
-      : 'Question Filter: Ask all meaningful questions.';
+function buildPlanningQuestionFilterPrompt(level: QuestionSensitivity): string {
+  const levelInstruction = level === 'flow'
+    ? 'Question sensitivity: FLOW. Ask only REVIEW_REQUIRED items and apply all others as assumptions.'
+    : level === 'balanced'
+      ? 'Question sensitivity: BALANCED. Ask REVIEW_REQUIRED items and the most important REVIEW_RECOMMENDED items.'
+      : level === 'review'
+        ? 'Question sensitivity: REVIEW. Ask REVIEW_REQUIRED items and most REVIEW_RECOMMENDED items.'
+        : 'Question sensitivity: STRICT. Show all candidates, including AUTO_WITH_LOG items, and keep the review metadata explicit.';
 
   return [
     '---',
-    `## Question Filter Level: ${level}`,
+    `## Question Sensitivity: ${level}`,
     '',
     levelInstruction,
     '',
     'Planning constraints:',
-    '- questions must contain only items that meet the active threshold.',
-    '- questions must contain at most 3 items.',
-    '- Every unasked decision must be recorded in assumptions instead.',
+    '- Every candidate must have human_review_level, review_categories, risk_categories, reason, default_if_skipped, risk_if_wrong, related_files, and can_auto_apply.',
+    '- `leverage_score` is optional and should only be used as an internal sorting aid if needed.',
+    '- REVIEW_REQUIRED items must always be surfaced.',
+    '- REVIEW_RECOMMENDED items depend on the active sensitivity mode.',
+    '- AUTO_WITH_LOG items should only be surfaced in STRICT mode.',
+    '- Every unasked decision must be recorded in assumption_log instead.',
     '---'
   ].join('\n');
 }
@@ -673,6 +1209,53 @@ function buildImplementationDefaultsPrompt(level: QuestionFilterLevel): string {
     '// DEFAULT: [decision made] - [one-line reason]',
     '---'
   ].join('\n');
+}
+
+function buildTutorialSystemPrompt(strictMode: boolean): string {
+  return [
+    'You generate Korean tutorial markdown for Debtcrasher.',
+    'Debtcrasher does not claim AI output is always correct; it preserves traceable decisions, code evidence, and validation results.',
+    '',
+    'Required headings, exactly:',
+    '# 제목',
+    '## 선택한 결정',
+    '## Human Review Level',
+    '## Review Categories',
+    '## 당시 맥락',
+    '## 선택하지 않은 대안',
+    '## 이 결정이 구현에 준 영향',
+    '## 관련 결정 로그',
+    '## 관련 파일',
+    '## 검증 결과',
+    '## 나중에 다시 확인할 점',
+    '',
+    'Grounding rules:',
+    '- Do not invent facts beyond the provided decision log, related files, validation result, and AGENT.md context.',
+    '- Mention the selected step id or decision id in the body.',
+    '- Mention the human review level and review categories explicitly.',
+    '- If validation failed or is unavailable, do not describe the result as successful, complete, problem-free, or guaranteed.',
+    '- Avoid strong claims such as "항상", "완벽히", "보장한다", or "절대".',
+    '- Use these evidence labels: [사용자 결정], [코드 근거], [검증 결과], [AI 추론], [확인 필요].',
+    strictMode
+      ? '- Strict mode: every major paragraph or bullet must start with one evidence label, and the "나중에 다시 확인할 점" section is mandatory and substantive.'
+      : '- Basic mode: use concise evidence labels on major bullets or paragraphs where useful.',
+    '- Keep the tutorial useful but clearly bounded by the evidence.'
+  ].join('\n');
+}
+
+function formatDecisionValidationForPrompt(entry: DecisionLogEntry): string {
+  const validation = entry.validationResult;
+  if (!validation) {
+    return 'needs_review';
+  }
+  return [
+    `typecheck=${validation.typecheck || 'not available'}`,
+    `build=${validation.build || 'not available'}`,
+    `test=${validation.test || 'not available'}`,
+    `lint=${validation.lint || 'not available'}`,
+    `repair_attempted=${validation.repairAttempted ? 'true' : 'false'}`,
+    `status=${validation.status || 'needs_review'}`
+  ].join(', ');
 }
 
 function getTutorialTokenBudget(entryCount: number): number {
