@@ -73,21 +73,6 @@
           "default": "anthropic",
           "markdownDescription": "현재 사용할 AI 제공자를 선택합니다."
         },
-        "aiStepDev.questionFilterLevel": {
-          "type": "string",
-          "enum": [
-            "high",
-            "medium",
-            "low"
-          ],
-          "default": "medium",
-          "enumDescriptions": [
-            "아키텍처를 크게 바꾸는 질문만 묻습니다.",
-            "아키텍처와 주요 UX 범위 질문까지 묻습니다.",
-            "의미 있는 모든 질문을 허용합니다."
-          ],
-          "markdownDescription": "Agent View가 어느 수준까지 질문을 직접 사용자에게 물을지 결정합니다."
-        },
         "debtcrasher.questionSensitivity": {
           "type": "string",
           "enum": [

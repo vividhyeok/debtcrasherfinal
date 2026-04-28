@@ -115,7 +115,7 @@ export class DebtcrasherExtension implements vscode.Disposable {
       vscode.commands.registerCommand('debtcrasher.openStepView', () => this.openStepView()),
       vscode.commands.registerCommand('debtcrasher.openBoth', () => this.openBoth()),
       vscode.commands.registerCommand('debtcrasher.openSettings', () =>
-        vscode.commands.executeCommand('workbench.action.openSettings', 'debtcrasher api key model questionSensitivity traceability aiStepDev.questionFilterLevel')
+        vscode.commands.executeCommand('workbench.action.openSettings', 'debtcrasher api key model questionSensitivity traceability')
       )
     );
   }

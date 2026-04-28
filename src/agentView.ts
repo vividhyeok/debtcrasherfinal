@@ -174,7 +174,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
         if (!this.view) {
           return;
         }
-        if (event.affectsConfiguration('debtcrasher') || event.affectsConfiguration('aiStepDev.questionFilterLevel')) {
+        if (event.affectsConfiguration('debtcrasher')) {
           void this.postWorkspaceState();
         }
       }),
@@ -1293,12 +1293,25 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     }
 
     function appendStatusMessage(text, phase, target) {
+      // Remove active state from any previous status messages
+      const previousChips = (target || thread).querySelectorAll('.status-message.is-active');
+      previousChips.forEach((msg) => {
+        msg.classList.remove('is-active');
+        const icon = msg.querySelector('.codicon-loading');
+        if (icon) icon.remove();
+      });
+
       const phaseLabel = phase ? (PHASE_LABELS[phase] || phase) : '';
+      const isComplete = phase === 'complete';
+      const statusIcon = isComplete ? codicon('check') : codicon('loading codicon-modifier-spin');
+
       const html = [
-        phaseLabel ? '<div class="inline-status-head"><span class="inline-phase-chip">' + escapeHtml(phaseLabel) + '</span></div>' : '',
+        phaseLabel ? '<div class="inline-status-head"><span class="inline-phase-chip">' + statusIcon + escapeHtml(phaseLabel) + '</span></div>' : '',
         '<p>' + escapeHtml(text).replace(/\\n/g, '<br>') + '</p>'
       ].join('');
-      appendMessage('Agent', 'message-assistant status-message', html, target);
+
+      const msg = appendMessage('Agent', 'message-assistant status-message' + (isComplete ? '' : ' is-active'), html, target);
+      return msg;
     }
 
     function ensureProgressGroup(requestId) {
@@ -1357,12 +1370,12 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     }
 
     function getProgressCodicon(message) {
-      if (message.event === 'file_start') return 'file';
+      if (message.event === 'file_start') return 'loading codicon-modifier-spin';
       if (message.event === 'file_done') return 'check';
       if (message.event === 'file_edit') return 'edit';
-      if (message.event === 'verify_start') return 'beaker';
+      if (message.event === 'verify_start') return 'loading codicon-modifier-spin';
       if (message.event === 'verify_done') return message.output === 'not available' ? 'circle-slash' : message.passed ? 'pass' : 'error';
-      if (message.event === 'repair_start') return 'tools';
+      if (message.event === 'repair_start') return 'loading codicon-modifier-spin';
       if (message.event === 'log_done') return 'book';
       if (message.event === 'agent_updated') return 'file-symlink-file';
       return 'info';
@@ -1381,6 +1394,17 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
         group.summaryNode = null;
       }
 
+      // Remove active state from previous nodes in the same group
+      group.nodes.forEach((node) => {
+        const bubble = node.querySelector('.progress-bubble');
+        if (bubble) bubble.classList.remove('is-active');
+        // Stop spinning for previous nodes if they were stuck
+        const icon = node.querySelector('.codicon-loading');
+        if (icon) {
+          icon.className = 'codicon codicon-check';
+        }
+      });
+
       group.items.push({
         event: message.event,
         text: text,
@@ -1391,7 +1415,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       const article = document.createElement('article');
       article.className = 'message message-assistant progress-message';
       article.setAttribute('data-progress-request-id', requestId);
-      article.innerHTML = '<div class="bubble progress-bubble"><p>' + codicon(getProgressCodicon(message)) + '<span>' + escapeHtml(text) + '</span></p></div>';
+      article.innerHTML = '<div class="bubble progress-bubble is-active"><p>' + codicon(getProgressCodicon(message)) + '<span>' + escapeHtml(text) + '</span></p></div>';
       thread.appendChild(article);
       group.nodes.push(article);
       scrollToBottom(thread);

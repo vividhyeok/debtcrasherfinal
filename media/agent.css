@@ -245,10 +245,11 @@ body {
   padding: 2px 6px;
   border: 0;
   border-radius: var(--radius);
-  background: var(--vscode-editorWidget-background);
-  color: var(--muted);
-  font-size: calc(var(--vscode-font-size) * 0.9);
+  background: transparent;
+  color: var(--text);
+  font-size: calc(var(--vscode-font-size) * 0.95);
   animation: progress-fade-in 120ms ease;
+  opacity: 0.8;
 }
 
 .progress-bubble p {
@@ -261,14 +262,20 @@ body {
 .progress-bubble .codicon,
 .progress-summary-toggle .codicon,
 .progress-summary-item .codicon {
-  color: var(--vscode-foreground);
-  opacity: 0.6;
+  color: var(--accent);
   font-size: 14px;
   line-height: 1;
 }
 
+.progress-bubble.is-active,
+.status-message.is-active .inline-phase-chip {
+  animation: pulse-opacity 1.5s infinite ease-in-out;
+  opacity: 1;
+}
+
 .progress-summary-message {
   max-width: 100%;
+  margin-top: 2px;
 }
 
 .progress-summary-message .bubble {
@@ -284,13 +291,19 @@ body {
   align-items: center;
   gap: 6px;
   max-width: 100%;
-  padding: 2px 6px;
+  padding: 4px 8px;
   border-radius: var(--radius);
   background: var(--vscode-editorWidget-background);
-  color: var(--muted);
-  font-size: calc(var(--vscode-font-size) * 0.9);
+  border: 1px solid var(--stroke);
+  color: var(--text);
+  font-size: calc(var(--vscode-font-size) * 0.95);
   cursor: pointer;
   list-style: none;
+  transition: background 0.1s;
+}
+
+.progress-summary-toggle:hover {
+  background: var(--vscode-list-hoverBackground, rgba(90,93,94,0.31));
 }
 
 .progress-summary-toggle::-webkit-details-marker {
@@ -592,8 +605,7 @@ body {
   font-size: var(--vscode-font-size);
 }
 
-.custom-choice input,
-.input-box {
+.custom-choice input {
   width: 100%;
   border: 1px solid var(--vscode-input-border, var(--stroke));
   border-radius: var(--radius);
@@ -604,8 +616,7 @@ body {
   font-size: var(--vscode-font-size);
 }
 
-.custom-choice input:focus,
-.input-box:focus {
+.custom-choice input:focus {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
 }
@@ -621,8 +632,7 @@ body {
 .option-select,
 .confirm-button,
 .secondary-button,
-.send-btn,
-.input-box {
+.send-btn {
   font: inherit;
   font-size: var(--vscode-font-size);
 }
@@ -824,6 +834,11 @@ body {
   }
 }
 
+@keyframes pulse-opacity {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
 /* ── History Pane ── */
 
 .pane-history {
@@ -924,9 +939,10 @@ body {
 .composer {
   position: sticky;
   bottom: 0;
-  padding: 6px 8px 8px;
-  border-top: 1px solid var(--stroke);
-  background: var(--panel-strong);
+  padding: 8px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
 }
 
 .composer-label {
@@ -934,12 +950,30 @@ body {
 }
 
 .input-box {
-  min-height: 72px;
-  resize: vertical;
+  min-height: 52px;
+  max-height: 200px;
+  resize: none;
+  border-radius: 6px;
+  border: 1px solid var(--vscode-input-border, var(--stroke));
+  background: var(--vscode-input-background, var(--panel));
+  color: var(--text);
+  padding: 8px 10px 32px 10px;
+  font: inherit;
+  font-size: var(--vscode-font-size);
+  line-height: 1.4;
+  transition: border-color 0.1s, box-shadow 0.1s;
+}
+
+.input-box:focus {
+  outline: none;
+  border-color: var(--vscode-focusBorder);
+  box-shadow: 0 0 0 1px var(--vscode-focusBorder) inset;
 }
 
 .composer-footer {
-  margin-top: 4px;
+  position: absolute;
+  bottom: 14px;
+  right: 14px;
   display: flex;
   justify-content: flex-end;
   align-items: center;

@@ -14,8 +14,10 @@ export async function activateDebtcrasher(
 
   if (context.extensionMode === vscode.ExtensionMode.Development) {
     setTimeout(() => {
-      void extension.openBoth();
-    }, 400);
+      extension.openBoth().catch((error) => {
+        console.warn('[Debtcrasher] Failed to auto-open sidebar in dev mode:', error);
+      });
+    }, 800);
   } else {
     await extension.showWelcomeIfNeeded();
   }

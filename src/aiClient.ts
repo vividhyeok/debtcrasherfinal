@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { DecisionLogEntry } from './logManager';
 
 export type AIProvider = 'anthropic' | 'google' | 'openai' | 'deepseek';
-export type QuestionFilterLevel = 'high' | 'medium' | 'low';
+
 export type QuestionSensitivity = 'flow' | 'balanced' | 'review' | 'strict';
 export type PlanningImpact = 'HIGH' | 'MEDIUM' | 'LOW';
 export type TraceabilityMode = 'basic' | 'strict';
@@ -336,7 +336,7 @@ export class AIClient {
     planSummary = '',
     abortSignal?: AbortSignal
   ): Promise<ImplementationResponse> {
-    const systemPrompt = `${IMPLEMENTATION_SYSTEM_PROMPT}\n\n${buildImplementationDefaultsPrompt(await this.getQuestionFilterLevel())}`;
+    const systemPrompt = `${IMPLEMENTATION_SYSTEM_PROMPT}\n\n${buildImplementationDefaultsPrompt(await this.getQuestionSensitivity())}`;
     const userPrompt = [
       `Developer task: ${task}`,
       '',
@@ -384,7 +384,7 @@ export class AIClient {
     verificationContext = '',
     abortSignal?: AbortSignal
   ): Promise<ImplementationResponse> {
-    const systemPrompt = `${REPAIR_SYSTEM_PROMPT}\n\n${buildImplementationDefaultsPrompt(await this.getQuestionFilterLevel())}`;
+    const systemPrompt = `${REPAIR_SYSTEM_PROMPT}\n\n${buildImplementationDefaultsPrompt(await this.getQuestionSensitivity())}`;
     const userPrompt = [
       `Developer task: ${task}`,
       '',
@@ -493,11 +493,6 @@ export class AIClient {
     };
   }
 
-  public async getQuestionFilterLevel(): Promise<QuestionFilterLevel> {
-    const configured = vscode.workspace.getConfiguration().get<string>('aiStepDev.questionFilterLevel', 'medium');
-    return isQuestionFilterLevel(configured) ? configured : 'medium';
-  }
-
   public async getQuestionSensitivity(): Promise<QuestionSensitivity> {
     const configured = this.getConfiguration().get<string>('questionSensitivity', 'balanced');
     return isQuestionSensitivity(configured) ? configured : 'balanced';
@@ -506,10 +501,6 @@ export class AIClient {
   public getTraceabilityMode(): TraceabilityMode {
     const configured = this.getConfiguration().get<string>('traceabilityMode', 'basic');
     return isTraceabilityMode(configured) ? configured : 'basic';
-  }
-
-  public async saveQuestionFilterLevel(level: QuestionFilterLevel): Promise<void> {
-    await vscode.workspace.getConfiguration().update('aiStepDev.questionFilterLevel', level, vscode.ConfigurationTarget.Workspace);
   }
 
   public async saveCurrentModel(model: string): Promise<{ id: AIProvider; displayName: string; model: string; modelOptions: string[] }> {
@@ -1147,7 +1138,7 @@ function isImplementationFile(value: unknown): value is ImplementationFile {
 
 function isStringArray(value: unknown): value is string[] { return Array.isArray(value) && value.every((item) => typeof item === 'string'); }
 function isProvider(value: string): value is AIProvider { return value === 'anthropic' || value === 'google' || value === 'openai' || value === 'deepseek'; }
-function isQuestionFilterLevel(value: string): value is QuestionFilterLevel { return value === 'high' || value === 'medium' || value === 'low'; }
+
 function isQuestionSensitivity(value: string): value is QuestionSensitivity { return value === 'flow' || value === 'balanced' || value === 'review' || value === 'strict'; }
 function isPlanningImpact(value: unknown): value is PlanningImpact { return value === 'HIGH' || value === 'MEDIUM' || value === 'LOW'; }
 function isTraceabilityMode(value: unknown): value is TraceabilityMode { return value === 'basic' || value === 'strict'; }
@@ -1198,10 +1189,10 @@ function buildPlanningQuestionFilterPrompt(level: QuestionSensitivity): string {
   ].join('\n');
 }
 
-function buildImplementationDefaultsPrompt(level: QuestionFilterLevel): string {
+function buildImplementationDefaultsPrompt(sensitivity: QuestionSensitivity): string {
   return [
     '---',
-    `## Planning Applied: ${level}`,
+    `## Planning Applied: sensitivity=${sensitivity}`,
     '',
     'The planning phase is complete. Do not ask any more questions in implementation mode.',
     'Any remaining uncertainty must be resolved with sensible defaults that match the workspace and AGENT.md.',
