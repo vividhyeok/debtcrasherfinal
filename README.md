@@ -1,6 +1,6 @@
 # DebtCrasher
 
-DebtCrasher는 AI가 코드를 대신 작성하는 도구가 아니라, AI 협업 개발 중 사라지기 쉬운 설계 판단을 기록하고 회고 가능한 학습 자료로 전환하는 VS Code 확장 프로그램입니다.
+English version of the project README. For the Korean version, see [README.ko.md](README.ko.md).
 
 ## 1. What is DebtCrasher?
 
