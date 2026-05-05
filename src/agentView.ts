@@ -104,6 +104,7 @@ type AgentViewMessage =
   | ResumeHistorySessionMessage
   | NewSessionMessage
   | RunDemoSeedMessage
+  | { type: 'openSettings' }
   | { type: 'ready' };
 
 interface PendingPlanningSession {
@@ -125,10 +126,10 @@ interface ImplementationFileSummary {
 
 const textEncoder = new TextEncoder();
 const WORKSPACE_SNAPSHOT_OPTIONS = {
-  maxFiles: 10,
-  maxInlineFiles: 4,
-  maxFileSize: 20_000,
-  maxInlineCharacters: 2_500
+  maxFiles: 12,
+  maxInlineFiles: 6,
+  maxFileSize: 40_000,
+  maxInlineCharacters: 5_000
 } as const;
 
 export class AgentViewController implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -225,6 +226,9 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
         return;
       case 'runDemoSeed':
         await this.handleRunDemoSeed();
+        return;
+      case 'openSettings':
+        await vscode.commands.executeCommand('debtcrasher.openSettings');
         return;
       case 'submitTask':
         await this.handleSubmitTask(message);
@@ -355,7 +359,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       workspaceContext: 'DEMO MODE: 실제 workspace 파일을 읽거나 수정하지 않습니다.'
     });
     this.demoRequestIds.add(requestId);
-    this.postPhaseUpdate(requestId, 'DEMO MODE: 실제 파일 변경 없이 Planning Gate → Decision Log → Validation → Tutorial 흐름을 보여줍니다.', 'planning');
+    this.postPhaseUpdate(requestId, 'DEMO MODE: 실제 파일 변경 없이 Planning Gate → Decision Log → Validation → 학습 자료 생성 흐름을 보여줍니다.', 'planning');
     this.postMessage({ type: 'planningResponse', requestId, plan, demoMode: true });
   }
 
@@ -568,15 +572,15 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       type: 'implementationResponse',
       requestId,
       currentWork: 'DEMO MODE: TODO 저장 기능 sample flow',
-      summary: `실제 파일 변경 없이 ${history.length}개 demo 결정을 기준으로 Decision Log, Validation, Tutorial 흐름을 표시했습니다.`,
+      summary: `실제 파일 변경 없이 ${history.length}개 demo 결정을 기준으로 Decision Log, Validation, 학습 자료 생성 흐름을 표시했습니다.`,
       files: [
         { path: 'DECISIONS.md (demo preview, not written)', description: '구조화된 decision entry preview' },
         { path: 'src/storage/todoStorage.ts (demo preview, not written)', description: '관련 구현 파일 예시' },
-        { path: '.ai-tutorials/todo-storage-demo.md (demo preview, not written)', description: '튜토리얼 seed markdown 예시' }
+        { path: '.ai-tutorials/todo-storage-demo.md (demo preview, not written)', description: '학습 자료 seed markdown 예시' }
       ],
       runInstructions: [
         'DEMO MODE: 실제 파일 생성/수정은 수행하지 않았습니다.',
-        `Bundled tutorial seed length: ${DEMO_TUTORIAL_MARKDOWN.length} characters`
+        `Bundled learning-material seed length: ${DEMO_TUTORIAL_MARKDOWN.length} characters`
       ],
       guidePath: 'DECISIONS.md / AGENT.md (demo preview, not written)',
       verificationSummary: 'demo validation seed: typecheck passed, build/test/lint not available.',
@@ -1125,7 +1129,8 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       <div class="topbar-actions">
         <button id="chatModeBtn" class="icon-button is-active" type="button" title="채팅" aria-label="채팅" aria-selected="true" role="tab"><i class="codicon codicon-comment-discussion"></i></button>
         <button id="historyModeBtn" class="icon-button" type="button" title="작업 기록" aria-label="작업 기록" aria-selected="false" role="tab"><i class="codicon codicon-history"></i></button>
-        <button id="demoSeedBtn" class="icon-button" title="데모 시나리오 실행" aria-label="데모 시나리오 실행"><i class="codicon codicon-beaker"></i></button>
+        <button id="settingsBtn" class="icon-button" type="button" title="설정 열기" aria-label="설정 열기"><i class="codicon codicon-settings-gear"></i></button>
+        <button id="demoSeedBtn" class="icon-button" title="데모 시나리오 실행" aria-label="데모 시나리오 실행" hidden><i class="codicon codicon-beaker"></i></button>
         <button id="newSessionBtn" class="icon-button" title="새 세션 시작" aria-label="새 세션 시작"><i class="codicon codicon-add"></i></button>
       </div>
     </header>
@@ -1159,6 +1164,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     const userInput = document.getElementById('userInput');
     const demoSeedBtn = document.getElementById('demoSeedBtn');
     const newSessionBtn = document.getElementById('newSessionBtn');
+    const settingsBtn = document.getElementById('settingsBtn');
     const environmentMeta = document.getElementById('environmentMeta');
     const chatModeBtn = document.getElementById('chatModeBtn');
     const historyModeBtn = document.getElementById('historyModeBtn');
@@ -1255,7 +1261,8 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     function updateEnvironmentMeta(provider, hasWorkspace, traceabilityMode) {
       if (!provider) return;
       const modeLabel = traceabilityMode === 'strict' ? 'Strict' : 'Basic';
-      environmentMeta.textContent = provider.displayName + ' ' + provider.model + ' · 워크스페이스 ' + (hasWorkspace ? '연결됨' : '없음') + ' · ' + modeLabel;
+      const keyLabel = provider.hasApiKey ? '키 설정됨' : '키 필요';
+      environmentMeta.textContent = provider.displayName + ' ' + provider.model + ' · ' + keyLabel + ' · 워크스페이스 ' + (hasWorkspace ? '연결됨' : '없음') + ' · ' + modeLabel;
     }
 
     function setPhase(requestId, phase) {
@@ -1533,18 +1540,26 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     }
 
     function renderOptionHtml(questionId, choice, option, isSelected) {
+      const pros = Array.isArray(option.pros) ? option.pros : [];
+      const cons = Array.isArray(option.cons) ? option.cons : [];
+      const detailHtml = pros.length > 0 || cons.length > 0
+        ? [
+            '  <details class="option-details">',
+            '    <summary>장단점 보기</summary>',
+            '    <div class="tradeoffs">',
+            pros.length > 0 ? '      <p class="tradeoff-title">장점</p><ul>' + pros.map((item) => '<li>' + escapeHtml(item) + '</li>').join('') + '</ul>' : '',
+            cons.length > 0 ? '      <p class="tradeoff-title">단점</p><ul>' + cons.map((item) => '<li>' + escapeHtml(item) + '</li>').join('') + '</ul>' : '',
+            '    </div>',
+            '  </details>'
+          ].join('')
+        : '';
       return [
         '<section class="option-card' + (isSelected ? ' is-selected-card' : '') + '">',
         '  <button type="button" class="option-select' + (isSelected ? ' is-selected' : '') + '" data-question-id="' + escapeHtml(questionId) + '" data-choice-type="' + choice + '">',
         '    <span class="option-badge">Option ' + choice + '</span>',
         '    <strong>' + escapeHtml(option.label) + '</strong>',
         '  </button>',
-        '  <div class="tradeoffs">',
-        '    <p class="tradeoff-title">Pros</p>',
-        '    <ul>' + option.pros.map((item) => '<li>' + escapeHtml(item) + '</li>').join('') + '</ul>',
-        '    <p class="tradeoff-title">Cons</p>',
-        '    <ul>' + option.cons.map((item) => '<li>' + escapeHtml(item) + '</li>').join('') + '</ul>',
-        '  </div>',
+        detailHtml,
         '</section>'
       ].join('');
     }
@@ -1576,18 +1591,30 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       return '자동 처리 + 로그';
     }
 
+    function renderImpactLabel(impact) {
+      if (impact === 'HIGH') return '영향 큼';
+      if (impact === 'MEDIUM') return '영향 보통';
+      if (impact === 'LOW') return '영향 낮음';
+      return impact || '';
+    }
+
     function renderQuestionMetadata(question) {
       const risks = Array.isArray(question.risk_categories) ? question.risk_categories.join(', ') : '';
       const reviewCategories = Array.isArray(question.review_categories) ? question.review_categories.join(', ') : '';
       const reviewLevel = normalizeHumanReviewLevel(question.human_review_level);
+      const detailRows = [
+        question.default_if_skipped ? '<li><strong>기본값</strong><span>' + escapeHtml(question.default_if_skipped) + '</span></li>' : '',
+        question.risk_if_wrong ? '<li><strong>잘못 고르면</strong><span>' + escapeHtml(question.risk_if_wrong) + '</span></li>' : '',
+        reviewCategories ? '<li><strong>검토 분류</strong><span>' + escapeHtml(reviewCategories) + '</span></li>' : '',
+        risks ? '<li><strong>위험 분류</strong><span>' + escapeHtml(risks) + '</span></li>' : ''
+      ].filter(Boolean).join('');
       return [
         '<div class="question-metadata">',
-        '  <span class="review-badge review-' + escapeHtml(reviewLevel.toLowerCase()) + '">' + escapeHtml(renderReviewLevelLabel(reviewLevel)) + '</span>',
-        question.reason ? '  <span>' + escapeHtml(question.reason) + '</span>' : '',
-        question.default_if_skipped ? '  <span>Default: ' + escapeHtml(question.default_if_skipped) + '</span>' : '',
-        question.risk_if_wrong ? '  <span>Risk: ' + escapeHtml(question.risk_if_wrong) + '</span>' : '',
-        reviewCategories ? '  <span>Review Categories: ' + escapeHtml(reviewCategories) + '</span>' : '',
-        risks ? '  <span>Categories: ' + escapeHtml(risks) + '</span>' : '',
+        '  <div class="question-meta-line">',
+        '    <span class="review-badge review-' + escapeHtml(reviewLevel.toLowerCase()) + '">' + escapeHtml(renderReviewLevelLabel(reviewLevel)) + '</span>',
+        question.reason ? '    <span class="question-reason">' + escapeHtml(question.reason) + '</span>' : '',
+        '  </div>',
+        detailRows ? '  <details class="question-details"><summary>판단 근거 보기</summary><ul>' + detailRows + '</ul></details>' : '',
         '</div>'
       ].join('');
     }
@@ -1604,7 +1631,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
         '      <p class="decision-point-label">Q' + (index + 1) + ' · ' + escapeHtml(question.topic) + '</p>',
         '      <h2>' + escapeHtml(question.question) + '</h2>',
         '    </div>',
-        '    <span class="impact-badge impact-' + escapeHtml((question.impact || '').toLowerCase()) + '">' + escapeHtml(question.impact) + '</span>',
+        '    <span class="impact-badge impact-' + escapeHtml((question.impact || '').toLowerCase()) + '">' + escapeHtml(renderImpactLabel(question.impact)) + '</span>',
         '  </div>',
         renderQuestionMetadata(question),
         '  <div class="options-grid">',
@@ -1633,7 +1660,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
           '      <p class="decision-point-label">Q' + (index + 1) + ' · ' + escapeHtml(question.topic) + '</p>',
           '      <h2>' + escapeHtml(question.question) + '</h2>',
           '    </div>',
-          '    <span class="impact-badge impact-' + escapeHtml((question.impact || '').toLowerCase()) + '">' + escapeHtml(question.impact) + '</span>',
+          '    <span class="impact-badge impact-' + escapeHtml((question.impact || '').toLowerCase()) + '">' + escapeHtml(renderImpactLabel(question.impact)) + '</span>',
           '  </div>',
           renderQuestionMetadata(question),
           '  <div class="options-grid">',
@@ -1648,6 +1675,18 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
           '</section>'
         ].join('');
       }).join('') + '</div>';
+    }
+
+    function buildQuestionBadgeText(questions) {
+      const q = questions || [];
+      const reqCount = q.filter(x => x.human_review_level === 'REVIEW_REQUIRED').length;
+      const recCount = q.filter(x => x.human_review_level === 'REVIEW_RECOMMENDED').length;
+      const autoCount = q.filter(x => x.human_review_level === 'AUTO_WITH_LOG').length;
+      const parts = [];
+      if (reqCount > 0) parts.push('필수 확인 ' + reqCount + '개');
+      if (recCount > 0) parts.push('검토 권장 ' + recCount + '개');
+      if (autoCount > 0) parts.push('자동 기록 ' + autoCount + '개');
+      return parts.length > 0 ? parts.join(' · ') : '검토 질문 ' + q.length + '개';
     }
 
     function appendPlanningCard(requestId, plan) {
@@ -1668,7 +1707,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       const planHtml = [
         '<div class="workflow-head">',
         '  <p class="decision-point-label">Planning</p>',
-        '  <span class="decision-badge">' + escapeHtml((plan.questions || []).length + '개 질문') + '</span>',
+        '  <span class="decision-badge">' + escapeHtml(buildQuestionBadgeText(plan.questions)) + '</span>',
         '</div>',
         '<div class="summary-grid summary-grid-single">',
         '  <section class="summary-card">',
@@ -1771,7 +1810,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       appendMessage('Agent', 'message-assistant planning-message', [
         '<div class="workflow-head">',
         '  <p class="decision-point-label">Planning</p>',
-        '  <span class="decision-badge">' + escapeHtml((planning.questions || []).length + '개 질문') + '</span>',
+        '  <span class="decision-badge">' + escapeHtml(buildQuestionBadgeText(planning.questions)) + '</span>',
         '</div>',
         '<div class="summary-grid summary-grid-single">',
         '  <section class="summary-card">',
@@ -1995,6 +2034,10 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       resetChatThread('새 세션을 시작했습니다. 다음 작업 목표를 적어 주세요.');
       vscode.postMessage({ type: 'newSession' });
       userInput.focus();
+    });
+
+    settingsBtn.addEventListener('click', () => {
+      vscode.postMessage({ type: 'openSettings' });
     });
 
     demoSeedBtn.addEventListener('click', () => {
@@ -2574,4 +2617,3 @@ function toErrorMessage(error: unknown): string {
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
-

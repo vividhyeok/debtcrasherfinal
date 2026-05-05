@@ -13,16 +13,14 @@ export interface TutorialValidationReport {
 
 const REQUIRED_HEADINGS = [
   '# 제목',
-  '## 선택한 결정',
-  '## Human Review Level',
-  '## Review Categories',
-  '## 당시 맥락',
-  '## 선택하지 않은 대안',
-  '## 이 결정이 구현에 준 영향',
+  '## 선택 기록',
+  '## 선택 근거',
+  '## 이전 선택과의 연결',
+  '## 사용자 선택 성향',
   '## 관련 결정 로그',
   '## 관련 파일',
-  '## 검증 결과',
-  '## 나중에 다시 확인할 점'
+  '## 검증 상태',
+  '## 다음 작업에서 확인할 점'
 ] as const;
 
 const STRONG_CLAIMS = ['항상', '완벽히', '보장한다', '절대'] as const;
@@ -37,7 +35,7 @@ export function validateTutorialMarkdown(
   const markdownWithReport = appendValidationReport(markdown, report);
 
   if (report.final_status === 'blocked') {
-    throw new Error(`튜토리얼 생성 검증에 실패했습니다.\n- ${report.messages.join('\n- ')}`);
+    throw new Error(`학습 자료 생성 검증에 실패했습니다.\n- ${report.messages.join('\n- ')}`);
   }
 
   return {
@@ -72,12 +70,12 @@ function buildTutorialValidationReport(
     messages.push(relatedFiles.length === 0 ? '관련 파일이 기록되지 않았습니다.' : '관련 파일이 본문에 명확히 포함되지 않았습니다.');
   }
 
-  const validationSection = extractSection(markdown, '## 검증 결과');
+  const validationSection = extractSection(markdown, '## 검증 상태');
   const validationResultIncluded = /(typecheck|build|test|lint|passed|failed|not available|needs_review|검증)/i.test(validationSection)
     ? 'pass'
     : 'fail';
   if (validationResultIncluded === 'fail') {
-    messages.push('검증 결과 섹션에 실제 검증 상태가 포함되지 않았습니다.');
+    messages.push('검증 상태 섹션에 실제 검증 상태가 포함되지 않았습니다.');
   }
 
   const unsupportedStrongClaims = STRONG_CLAIMS.reduce(
@@ -97,7 +95,7 @@ function buildTutorialValidationReport(
   }
 
   if (mode === 'strict' && !allMajorBlocksHaveEvidenceLabels(markdown)) {
-    messages.push('Strict mode에서는 주요 문단 또는 bullet 앞에 근거 라벨이 필요합니다.');
+    messages.push('Strict mode에서는 주요 bullet 앞에 근거 라벨이 필요합니다.');
   }
 
   const blockingFailures = [
@@ -162,14 +160,14 @@ function hasFailedValidation(entries: DecisionLogEntry[]): boolean {
 }
 
 function allMajorBlocksHaveEvidenceLabels(markdown: string): boolean {
-  const blocks = markdown
-    .split(/\r?\n\r?\n/)
-    .map((block) => block.trim())
-    .filter((block) => block && !block.startsWith('#') && !block.startsWith('```'));
-  if (blocks.length === 0) {
+  const evidenceLines = markdown
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^[-*]\s+/.test(line));
+  if (evidenceLines.length === 0) {
     return false;
   }
-  return blocks.every((block) => EVIDENCE_LABEL_PATTERN.test(block));
+  return evidenceLines.every((line) => EVIDENCE_LABEL_PATTERN.test(line));
 }
 
 function countOccurrences(source: string, phrase: string): number {

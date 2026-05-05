@@ -5,11 +5,11 @@ import * as vscode from 'vscode';
 // License: Apache-2.0
 
 const textDecoder = new TextDecoder();
-const SNAPSHOT_CHARACTER_BUDGET = 8_000;
-const PREVIEW_LINE_LIMIT = 50;
-const DEFAULT_MAX_FILES = 12;
-const DEFAULT_MAX_INLINE_FILES = 6;
-const DEFAULT_MAX_FILE_SIZE = 30_000;
+const SNAPSHOT_CHARACTER_BUDGET = 16_000;
+const PREVIEW_LINE_LIMIT = 120;
+const DEFAULT_MAX_FILES = 14;
+const DEFAULT_MAX_INLINE_FILES = 8;
+const DEFAULT_MAX_FILE_SIZE = 40_000;
 const SEARCH_EXCLUDE_GLOB = '{**/node_modules/**,**/.git/**,**/.vendor/**,**/dist/**,**/build/**,**/out/**,**/.ai-tutorials/**,**/*.lock,**/*.map,**/*.png,**/*.jpg,**/*.jpeg,**/*.gif,**/*.ico,**/*.pdf,**/*.zip,**/*.svg}';
 const CONFIG_FILE_NAMES = new Set(['package.json', 'tsconfig.json', 'go.mod', 'cargo.toml', 'requirements.txt']);
 const TASK_STOPWORDS = new Set([

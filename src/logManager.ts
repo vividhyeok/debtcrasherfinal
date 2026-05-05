@@ -128,7 +128,7 @@ const BASE_CONFIRMED_DECISIONS = [
 const IMPLIED_CONSTRAINTS = [
   'Local workspace files only -> no auth, no remote storage, and no server-side coordination unless the user explicitly introduces a backend.',
   'Mandatory planning gate + explicit step recording -> no autonomous implementation before surfaced questions are answered, no inferred steps, and no replay of already answered topics.',
-  'File-based tutorial history + editor-open flow -> markdown review and editing happen in VS Code, not inside Step View.'
+  'File-based learning-material history + editor-open flow -> markdown review and editing happen in VS Code, not inside Step View.'
 ] as const;
 
 const STATIC_DO_NOT_ASK_AGAIN = [
@@ -802,7 +802,7 @@ function decodeGuideMeta(value?: string): string {
 
 function sanitizeFileName(title: string): string {
   const stripped = title.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '').replace(/\.+$/g, '').trim();
-  return stripped.length > 0 ? stripped.slice(0, 80) : 'tutorial';
+  return stripped.length > 0 ? stripped.slice(0, 80) : 'learning-material';
 }
 
 function shouldRegenerateGuide(existing: string, entries: DecisionLogEntry[]): boolean {
@@ -948,4 +948,3 @@ function upsertGeneratedGuideSection(existing: string, generated: string): strin
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
-

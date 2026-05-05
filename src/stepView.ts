@@ -263,13 +263,13 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
       <section id="stepsSection" class="split-section top-section" style="flex-basis: 58%;">
         <div id="stepsHeader" class="section-header resize-handle">
           <div class="header-copy">
-            <p class="section-label">Steps</p>
+            <p class="section-label">결정 기록</p>
           </div>
           <div class="header-actions">
             <span id="stepsMeta" class="header-meta">0개 선택</span>
             <button id="selectAllButton" class="icon-button action-icon-button" type="button" data-no-drag="true" title="전체 선택" aria-label="전체 선택"><i class="codicon codicon-check-all"></i></button>
             <button id="clearSelectionButton" class="icon-button action-icon-button" type="button" data-no-drag="true" title="선택 해제" aria-label="선택 해제" disabled><i class="codicon codicon-clear-all"></i></button>
-            <button id="generateButton" class="icon-button action-icon-button action-icon-primary" type="button" data-no-drag="true" title="선택한 step으로 문서를 생성합니다" aria-label="문서 생성" disabled><i class="codicon codicon-notebook"></i></button>
+            <button id="generateButton" class="icon-button action-icon-button action-icon-primary" type="button" data-no-drag="true" title="선택한 결정으로 학습 자료를 생성합니다" aria-label="학습 자료 생성" disabled><i class="codicon codicon-notebook"></i></button>
           </div>
         </div>
         <div id="stepsList" class="section-scroll step-list"></div>
@@ -280,7 +280,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
       <section id="historySection" class="split-section bottom-section">
         <div id="historyHeader" class="section-header resize-handle">
           <div class="header-copy">
-            <p class="section-label">History</p>
+            <p class="section-label">학습 자료</p>
           </div>
           <div class="header-actions">
             <span id="historyMeta" class="header-meta">0개 파일</span>
@@ -370,8 +370,8 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
       generateButton.innerHTML = state.isGenerating
         ? '<i class="codicon codicon-loading codicon-modifier-spin"></i>'
         : '<i class="codicon codicon-notebook"></i>';
-      generateButton.title = state.isGenerating ? '문서 생성 중' : '선택한 step 문서 생성';
-      generateButton.setAttribute('aria-label', state.isGenerating ? '문서 생성 중' : '선택한 step 문서 생성');
+      generateButton.title = state.isGenerating ? '학습 자료 생성 중' : '선택한 결정으로 학습 자료 생성';
+      generateButton.setAttribute('aria-label', state.isGenerating ? '학습 자료 생성 중' : '선택한 결정으로 학습 자료 생성');
       selectAllButton.title = allSelected ? '모두 선택됨' : '전체 선택';
       selectAllButton.setAttribute('aria-label', allSelected ? '모두 선택됨' : '전체 선택');
 
@@ -406,7 +406,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
       pruneSelection();
 
       if (!state.entries || state.entries.length === 0) {
-        stepsList.innerHTML = '<p class="empty-state">기록된 step이 없습니다.</p>';
+        stepsList.innerHTML = '<p class="empty-state">기록된 결정이 없습니다.</p>';
         updateMeta();
         return;
       }
@@ -457,7 +457,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
 
     function getFileName(item) {
       const match = String(item.uri || '').match(/([^/]+)$/);
-      return match ? decodeURIComponent(match[1]) : ((item.title || 'tutorial') + '.md');
+      return match ? decodeURIComponent(match[1]) : ((item.title || 'learning-material') + '.md');
     }
 
     function renderHistory() {
@@ -520,7 +520,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
     function selectAllSteps() {
       state.entries.forEach((entry) => state.selectedIds.add(entry.id));
       renderSteps();
-      showStatus('모든 step을 선택했습니다.');
+      showStatus('모든 결정을 선택했습니다.');
     }
 
     function clearSelection() {
@@ -619,7 +619,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
         state.selectedIds.clear();
         renderSteps();
         const finalStatus = message.validation && message.validation.final_status ? message.validation.final_status : 'generated';
-        showStatus((message.count || 0) + '개 step 문서 생성 · 검증 ' + finalStatus);
+        showStatus((message.count || 0) + '개 결정 기반 학습 자료 생성 · 검증 ' + finalStatus);
         return;
       }
 
@@ -640,10 +640,10 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
 
 function buildTutorialTitle(entries: Array<{ title: string }>): string {
   if (entries.length === 1) {
-    return `${entries[0].title} 판단 기록`;
+    return `${entries[0].title} 선택 기록 분석`;
   }
 
-  return `${entries[0].title} 외 ${entries.length - 1}개 판단 기록`;
+  return `${entries[0].title} 외 ${entries.length - 1}개 선택 기록 분석`;
 }
 
 function createNonce(): string {

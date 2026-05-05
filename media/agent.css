@@ -378,6 +378,32 @@ body {
   font-size: calc(var(--vscode-font-size) * 0.85);
 }
 
+.review-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: var(--radius);
+  border: 1px solid var(--stroke);
+  color: var(--text);
+  font-size: calc(var(--vscode-font-size) * 0.85);
+  font-weight: 600;
+}
+
+.review-review_required {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.review-review_recommended {
+  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.review-auto_with_log {
+  color: var(--muted);
+}
+
 .workflow-current {
   margin: 0 0 6px;
   font-size: var(--vscode-font-size);
@@ -478,14 +504,69 @@ body {
 
 .question-metadata {
   display: grid;
-  gap: 2px;
-  margin-top: 4px;
+  gap: 4px;
+  margin-top: 6px;
   color: var(--muted);
   font-size: var(--vscode-font-size);
 }
 
-.question-metadata span {
-  display: block;
+.question-meta-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.question-reason {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.question-details,
+.option-details {
+  color: var(--muted);
+}
+
+.question-details summary,
+.option-details summary {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: calc(var(--vscode-font-size) * 0.92);
+  list-style: none;
+}
+
+.question-details summary:hover,
+.option-details summary:hover {
+  color: var(--text);
+}
+
+.question-details summary::-webkit-details-marker,
+.option-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.question-details ul {
+  display: grid;
+  gap: 3px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.question-details li {
+  display: grid;
+  grid-template-columns: 76px 1fr;
+  gap: 6px;
+}
+
+.question-details strong {
+  color: var(--text);
+  font-weight: 600;
 }
 
 .impact-badge {
@@ -587,6 +668,14 @@ body {
 }
 
 .tradeoffs {
+  padding: 4px 8px 6px;
+}
+
+.option-details {
+  border-top: 1px solid var(--stroke);
+}
+
+.option-details summary {
   padding: 4px 8px;
 }
 

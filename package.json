@@ -98,10 +98,10 @@
           ],
           "default": "basic",
           "enumDescriptions": [
-            "Basic mode: 최대 3개 질문, 가능한 검증만 실행, 튜토리얼 필수 섹션과 관련 근거를 확인합니다.",
+            "Basic mode: 가능한 자동 검증만 실행하고 학습 자료 필수 섹션과 근거를 확인합니다.",
             "Strict mode: 라벨과 강한 표현 검사를 강화하고 근거 추적을 더 엄격하게 확인합니다."
           ],
-          "markdownDescription": "Mode: Basic / Strict. Strict mode is slower but provides stronger traceability checks."
+          "markdownDescription": "Mode: Basic / Strict. Strict mode adds extra traceability checks and evidence labeling requirements."
         },
         "debtcrasher.anthropicApiKey": {
           "type": "string",
@@ -149,17 +149,23 @@
         "debtcrasher.openaiModel": {
           "type": "string",
           "enum": [
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.4-mini",
             "gpt-5",
             "gpt-5-mini",
             "gpt-4.1"
           ],
           "default": "gpt-5",
           "enumDescriptions": [
-            "더 강한 추론 성능에 무게를 둔 모델입니다.",
+            "현재 최고 성능 플래그십 모델입니다. 복잡한 추론과 에이전트 작업에 최적화되어 있습니다.",
+            "프로덕션 코딩 에이전트에 최적화된 강력한 모델입니다.",
+            "GPT-5.4의 경량 버전으로 비용과 속도를 절약하면서도 높은 코딩 성능을 유지합니다.",
+            "범용 추론 성능에 무게를 둔 모델입니다.",
             "비용과 속도 사이의 균형을 노린 경량 모델입니다.",
             "호환성과 안정성에 무게를 둔 선택지입니다."
           ],
-          "markdownDescription": "OpenAI 제공자에서 사용할 모델입니다."
+          "markdownDescription": "OpenAI 제공자에서 사용할 모델입니다. 목록에 없는 모델명도 직접 입력하면 사용할 수 있습니다."
         },
         "debtcrasher.deepseekApiKey": {
           "type": "string",
