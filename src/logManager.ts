@@ -1,4 +1,4 @@
-﻿import * as vscode from 'vscode';
+import * as vscode from 'vscode';
 
 import type { HumanReviewLevel, PlanningAssumption, RiskCategory } from './aiClient';
 
@@ -16,7 +16,6 @@ export interface DecisionLogEntry {
   humanReviewLevel?: HumanReviewLevel;
   reviewCategories?: string[];
   aiReasonForReview?: string;
-  leverageScore: number | undefined;
   riskCategories: RiskCategory[];
   defaultIfSkipped: string;
   riskIfWrong: string;
@@ -41,7 +40,6 @@ export interface DecisionLogEntryInput {
   humanReviewLevel?: HumanReviewLevel;
   reviewCategories?: string[];
   aiReasonForReview?: string;
-  leverageScore?: number;
   riskCategories?: RiskCategory[];
   defaultIfSkipped?: string;
   riskIfWrong?: string;
@@ -487,7 +485,7 @@ export class LogManager {
     const relatedFiles = entry.relatedFiles && entry.relatedFiles.length > 0
       ? entry.relatedFiles
       : ['needs_review'];
-    const reviewLevel = normalizeHumanReviewLevel(entry.humanReviewLevel, entry.leverageScore);
+    const reviewLevel = normalizeHumanReviewLevel(entry.humanReviewLevel);
     const reviewCategories = entry.reviewCategories && entry.reviewCategories.length > 0
       ? entry.reviewCategories
       : deriveReviewCategories(entry);
@@ -572,8 +570,7 @@ function parseStructuredLogEntry(section: string): DecisionLogEntry {
   const source = extractListSection(section, 'Source')
     .filter((item): item is DecisionSource => isDecisionSource(item));
   const humanReviewLevel = normalizeHumanReviewLevel(
-    extractMarkdownSection(section, 'Human Review Level') || undefined,
-    toOptionalNumber(extractMarkdownSection(section, 'Leverage Score'))
+    extractMarkdownSection(section, 'Human Review Level') || undefined
   );
 
   return {
@@ -590,7 +587,6 @@ function parseStructuredLogEntry(section: string): DecisionLogEntry {
     humanReviewLevel,
     reviewCategories,
     aiReasonForReview: extractMarkdownSection(section, 'AI Reason For Review'),
-    leverageScore: toOptionalNumber(extractMarkdownSection(section, 'Leverage Score')),
     riskCategories,
     defaultIfSkipped: extractMarkdownSection(section, 'Default If Skipped'),
     riskIfWrong: extractMarkdownSection(section, 'Risk If Wrong'),
@@ -620,7 +616,6 @@ function parseLegacyLogEntry(section: string): DecisionLogEntry {
     humanReviewLevel: 'REVIEW_REQUIRED',
     reviewCategories: [],
     aiReasonForReview: `AI-generated reason: ${extractField(section, /^\*\*Outcome\*\*:\s*(.+)$/m)}`,
-    leverageScore: undefined,
     riskCategories: [],
     defaultIfSkipped: 'needs_review',
     riskIfWrong: 'needs_review',
@@ -716,28 +711,22 @@ function toOptionalNumber(value: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function normalizeHumanReviewLevel(value?: string, leverageScore?: number): HumanReviewLevel {
+function normalizeHumanReviewLevel(value?: string): HumanReviewLevel {
   if (value === 'REVIEW_REQUIRED' || value === 'REVIEW_RECOMMENDED' || value === 'AUTO_WITH_LOG') {
     return value;
-  }
-  if (typeof leverageScore === 'number' && leverageScore >= 4) {
-    return 'REVIEW_REQUIRED';
-  }
-  if (typeof leverageScore === 'number' && leverageScore >= 2) {
-    return 'REVIEW_RECOMMENDED';
   }
   return 'AUTO_WITH_LOG';
 }
 
-function deriveReviewCategories(entry: Pick<DecisionLogEntryInput, 'riskCategories' | 'leverageScore' | 'relatedFiles' | 'reason'>): string[] {
+function deriveReviewCategories(entry: Pick<DecisionLogEntryInput, 'riskCategories' | 'relatedFiles' | 'reason' | 'humanReviewLevel'>): string[] {
   const categories = new Set<string>();
   if ((entry.riskCategories ?? []).includes('security') || (entry.riskCategories ?? []).includes('data_loss') || (entry.riskCategories ?? []).includes('public_contract')) {
     categories.add('Risk Impact');
   }
-  if ((entry.leverageScore ?? 0) >= 4) {
+  if (entry.humanReviewLevel === 'REVIEW_REQUIRED') {
     categories.add('Architecture Impact');
   }
-  if ((entry.leverageScore ?? 0) >= 3) {
+  if (entry.humanReviewLevel === 'REVIEW_RECOMMENDED') {
     categories.add('Tradeoff Point');
   }
   if (categories.size === 0) {

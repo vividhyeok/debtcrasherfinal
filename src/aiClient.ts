@@ -27,7 +27,6 @@ export interface DecisionHistoryEntry {
   humanReviewLevel?: HumanReviewLevel;
   reviewCategories?: string[];
   reason?: string;
-  leverageScore?: number;
   riskCategories?: RiskCategory[];
   defaultIfSkipped?: string;
   riskIfWrong?: string;
@@ -44,7 +43,6 @@ export interface PlanningAssumption {
   risk_categories: RiskCategory[];
   related_files?: string[];
   can_auto_apply?: boolean;
-  leverage_score?: number;
   skipped_because?: string;
   source: 'ai_inference' | 'code_evidence' | 'user_decision' | 'needs_review';
 }
@@ -58,7 +56,6 @@ export interface PlanningQuestion {
   optionB: DecisionOption;
   human_review_level?: HumanReviewLevel;
   review_categories?: string[];
-  leverage_score?: number;
   reason: string;
   default_if_skipped: string;
   risk_if_wrong: string;
@@ -628,7 +625,6 @@ function createFallbackPlanningResponse(task: string): PlanningResponse {
     optionB: options[1],
     human_review_level: 'REVIEW_REQUIRED',
     review_categories: ['Architecture Impact', 'Reversibility Cost', 'Tradeoff Point'],
-    leverage_score: 4,
     reason: 'AI planning 응답을 JSON으로 해석하지 못해 사용자가 가장 중요한 구현 방향만 선택하도록 축소했습니다.',
     default_if_skipped: '기존 코드 스타일을 최대한 따르는 방식',
     risk_if_wrong: '초기 구현 방향이 기대한 속도, 확장성, 기존 코드 일관성과 어긋날 수 있습니다.',
@@ -761,7 +757,6 @@ function normalizePlanningQuestion(question: PlanningQuestion, index: number): P
   const fallbackOptions = [question.optionA, question.optionB].filter(isDecisionOption);
   const normalizedOptions = ensureMinimumOptions(options.length >= 2 ? options : fallbackOptions);
   const humanReviewLevel = normalizeHumanReviewLevel(question.human_review_level ?? deriveHumanReviewLevel(question));
-  const leverageScore = normalizeLeverageScore(question.leverage_score, humanReviewLevel, question.risk_categories);
   const reviewCategories = normalizeReviewCategories(question.review_categories);
   const relatedFiles = Array.isArray(question.related_files)
     ? question.related_files.map((item) => item.trim()).filter(Boolean)
@@ -772,7 +767,7 @@ function normalizePlanningQuestion(question: PlanningQuestion, index: number): P
   return {
     ...question,
     id: question.id.trim() || `q${index + 1}`,
-    impact: leverageToImpact(leverageScore, question.risk_categories),
+    impact: deriveImpactFromReviewLevel(humanReviewLevel, question.risk_categories),
     topic: question.topic.trim() || question.decision_topic?.trim() || `판단 ${index + 1}`,
     question: question.question.trim(),
     options: normalizedOptions.slice(0, 4),
@@ -780,7 +775,6 @@ function normalizePlanningQuestion(question: PlanningQuestion, index: number): P
     optionB: normalizedOptions[1],
     human_review_level: humanReviewLevel,
     review_categories: reviewCategories,
-    leverage_score: leverageScore,
     reason: question.reason.trim(),
     default_if_skipped: question.default_if_skipped.trim(),
     risk_if_wrong: question.risk_if_wrong.trim(),
@@ -816,7 +810,7 @@ function hasStrongReviewSignal(question: PlanningQuestion): boolean {
       || normalized.includes('reversibility')
       || normalized.includes('stakeholder')
       || normalized.includes('tradeoff');
-  }) || (question.leverage_score ?? 0) >= 4;
+  });
 }
 
 function comparePlanningQuestions(left: PlanningQuestion, right: PlanningQuestion): number {
@@ -830,10 +824,6 @@ function comparePlanningQuestions(left: PlanningQuestion, right: PlanningQuestio
   const levelDelta = levelOrder[leftLevel] - levelOrder[rightLevel];
   if (levelDelta !== 0) {
     return levelDelta;
-  }
-  const scoreDelta = (right.leverage_score ?? 0) - (left.leverage_score ?? 0);
-  if (scoreDelta !== 0) {
-    return scoreDelta;
   }
   return left.topic.localeCompare(right.topic);
 }
@@ -919,7 +909,7 @@ function normalizeHumanReviewLevel(value: unknown): HumanReviewLevel {
     : 'AUTO_WITH_LOG';
 }
 
-function deriveHumanReviewLevel(question: Pick<PlanningQuestion, 'risk_categories' | 'reason' | 'risk_if_wrong' | 'review_categories' | 'leverage_score'>): HumanReviewLevel {
+function deriveHumanReviewLevel(question: Pick<PlanningQuestion, 'risk_categories' | 'reason' | 'risk_if_wrong' | 'review_categories'>): HumanReviewLevel {
   const text = `${question.reason} ${question.risk_if_wrong}`.toLowerCase();
   if (question.risk_categories.includes('security') || question.risk_categories.includes('data_loss') || question.risk_categories.includes('public_contract') || text.includes('비용') || text.includes('유료')) {
     return 'REVIEW_REQUIRED';
@@ -930,19 +920,11 @@ function deriveHumanReviewLevel(question: Pick<PlanningQuestion, 'risk_categorie
   return 'AUTO_WITH_LOG';
 }
 
-function normalizeLeverageScore(score: number | undefined, humanReviewLevel: HumanReviewLevel, categories: RiskCategory[]): number {
-  if (Number.isFinite(score)) {
-    return Math.max(0, Math.min(5, Math.round(score as number)));
-  }
-  const base = humanReviewLevel === 'REVIEW_REQUIRED' ? 5 : humanReviewLevel === 'REVIEW_RECOMMENDED' ? 3 : 1;
-  return categories.includes('security') || categories.includes('data_loss') || categories.includes('public_contract') ? Math.max(base, 5) : base;
-}
-
-function leverageToImpact(score: number, categories: RiskCategory[]): PlanningImpact {
-  if (categories.includes('security') || categories.includes('data_loss') || categories.includes('public_contract') || score >= 4) {
+function deriveImpactFromReviewLevel(humanReviewLevel: HumanReviewLevel, categories: RiskCategory[]): PlanningImpact {
+  if (categories.includes('security') || categories.includes('data_loss') || categories.includes('public_contract') || humanReviewLevel === 'REVIEW_REQUIRED') {
     return 'HIGH';
   }
-  if (score >= 2) {
+  if (humanReviewLevel === 'REVIEW_RECOMMENDED') {
     return 'MEDIUM';
   }
   return 'LOW';
@@ -997,7 +979,6 @@ function coercePlanningQuestion(value: unknown): PlanningQuestion | undefined {
     optionB: normalizedOptions[1],
     human_review_level: normalizeHumanReviewLevel(value.human_review_level),
     review_categories: normalizeReviewCategories(Array.isArray(value.review_categories) ? value.review_categories : []),
-    leverage_score: typeof value.leverage_score === 'number' ? value.leverage_score : undefined,
     reason: typeof value.reason === 'string' ? value.reason : '판단이 필요합니다.',
     default_if_skipped: typeof value.default_if_skipped === 'string' ? value.default_if_skipped : normalizedOptions[0]?.label ?? '기본값으로 진행',
     risk_if_wrong: typeof value.risk_if_wrong === 'string' ? value.risk_if_wrong : '잘못 선택하면 수정이 필요할 수 있습니다.',
@@ -1093,7 +1074,6 @@ function buildPlanningQuestionFilterPrompt(level: QuestionSensitivity): string {
     '',
     'Planning constraints:',
     '- Every candidate must have human_review_level, review_categories, risk_categories, reason, default_if_skipped, risk_if_wrong, related_files, and can_auto_apply.',
-    '- `leverage_score` is optional and should only be used as an internal sorting aid if needed.',
     '- REVIEW_REQUIRED items must always be surfaced.',
     '- REVIEW_RECOMMENDED items depend on the active sensitivity mode.',
     '- AUTO_WITH_LOG items should only be surfaced in STRICT mode.',

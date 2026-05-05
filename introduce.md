@@ -167,7 +167,7 @@ function shouldAskQuestion(question: PlanningQuestion, sensitivity: QuestionSens
 }
 ```
 
-정렬은 review level, `leverage_score`, topic 순서로 이루어진다.
+정렬은 review level, topic 순서로 이루어진다.
 
 ```ts
 function comparePlanningQuestions(left: PlanningQuestion, right: PlanningQuestion): number {
@@ -182,15 +182,11 @@ function comparePlanningQuestions(left: PlanningQuestion, right: PlanningQuestio
   if (levelDelta !== 0) {
     return levelDelta;
   }
-  const scoreDelta = (right.leverage_score ?? 0) - (left.leverage_score ?? 0);
-  if (scoreDelta !== 0) {
-    return scoreDelta;
-  }
   return left.topic.localeCompare(right.topic);
 }
 ```
 
-`leverage_score`는 제거된 필드가 아니라 내부 정렬 보조값으로 남아 있다. planning prompt 스키마에서는 요구하지 않지만, AI 응답에 포함되면 정렬에 활용된다.
+`leverage_score`는 코드베이스에서 완전히 제거되었다. 정렬은 `human_review_level`과 `topic`으로만 이루어진다.
 
 ## 5. 질문 민감도 설정
 
@@ -236,7 +232,6 @@ function buildPlanningQuestionFilterPrompt(level: QuestionSensitivity): string {
     '',
     'Planning constraints:',
     '- Every candidate must have human_review_level, review_categories, risk_categories, reason, default_if_skipped, risk_if_wrong, related_files, and can_auto_apply.',
-    '- `leverage_score` is optional and should only be used as an internal sorting aid if needed.',
     '- REVIEW_REQUIRED items must always be surfaced.',
     '- REVIEW_RECOMMENDED items depend on the active sensitivity mode.',
     '- AUTO_WITH_LOG items should only be surfaced in STRICT mode.',
@@ -266,7 +261,6 @@ export interface PlanningAssumption {
   risk_categories: RiskCategory[];
   related_files?: string[];
   can_auto_apply?: boolean;
-  leverage_score?: number;
   skipped_because?: string;
   source: 'ai_inference' | 'code_evidence' | 'user_decision' | 'needs_review';
 }
@@ -281,7 +275,6 @@ export interface PlanningQuestion {
   optionB: DecisionOption;
   human_review_level?: HumanReviewLevel;
   review_categories?: string[];
-  leverage_score?: number;
   reason: string;
   default_if_skipped: string;
   risk_if_wrong: string;
@@ -458,7 +451,6 @@ history.push({
   userChoice: resolvedChoice.userChoice,
   outcome: resolvedChoice.outcome,
   reason: question.reason,
-  leverageScore: question.leverage_score,
   riskCategories: [...question.risk_categories],
   defaultIfSkipped: question.default_if_skipped,
   riskIfWrong: question.risk_if_wrong,
@@ -1244,7 +1236,7 @@ Core principles:
 
 이 문서에 따르면 DebtCrasher의 설계 언어는 기존 `leverage_score`, `High/Mid/Low leverage` 중심에서 `human_review_level`, `review_categories`, `risk_categories`, `default_if_skipped`, `assumption_log`, `question_sensitivity` 중심으로 이동했다.
 
-구현상 `leverage_score` 필드는 아직 남아 있으나, planning prompt와 agent 문서 모두 user-facing 중심축은 `human_review_level`이라고 적고 있다.
+`leverage_score` 필드는 코드베이스에서 완전히 제거되었다. 정렬과 파생 로직 모두 `human_review_level`과 `risk_categories`만을 사용한다.
 
 ## 22. 논문 서술 시 사용할 수 있는 시스템 범위
 
@@ -1296,7 +1288,7 @@ Core principles:
 다음 제한 사항은 저장소 코드 기준으로 확인된다.
 
 - `human_review_level` 분류는 AI planning 응답과 코드의 정규화/필터링에 의존한다. 코드 어디에도 이 분류가 객관적 ground truth라고 정의되어 있지 않다.
-- `leverage_score`는 완전히 제거되지 않았다. `PlanningQuestion`, `PlanningAssumption`, `DecisionHistoryEntry`, `DecisionLogEntry`에 남아 있고 정렬/파생에 사용된다.
+- `leverage_score`는 코드베이스에서 완전히 제거되었다. 정렬과 파생 로직은 `human_review_level`과 `risk_categories`만을 사용한다.
 - `questionSensitivity`와 `traceabilityMode`는 VS Code settings로 제공된다. Agent View 안에서 별도 sensitivity selector UI가 구현되어 있지는 않다.
 - `.github/agents/debtcrasher-development.agent.md`에는 Strict mode에서 review level override control을 언급하지만, 현재 Agent View 코드에는 사용자가 review level 자체를 override하는 별도 control이 보이지 않는다. 사용자는 option 선택 또는 custom choice 입력은 할 수 있다.
 - Step View는 markdown을 inline preview하지 않고 VS Code editor로 연다.
@@ -1304,7 +1296,7 @@ Core principles:
 - 자동 검증은 사용 가능한 script나 언어별 fallback이 있을 때만 실행된다.
 - repair는 검증 실패 후 한 번 시도하는 흐름으로 구현되어 있다.
 - 학습 자료 생성은 현재 `AIClient.generateTutorial()` 엔트리포인트 안에서 선택된 decision log를 AI API 호출 없이 template 기반으로 재구성한다. 선택 기록, 선택 근거, 검증 상태, 관련 파일을 결정 로그에서 그대로 가져와 보기 편한 형태로 정리하는 수준이며, AI가 내용을 추가하거나 성향을 해석하지 않는다. validator는 section/근거/강한 표현 등을 검사하지만 문서 내용의 사실성을 완전히 증명하지 않는다.
-- 현재 저장소의 일부 한국어 문자열은 소스 출력에서 mojibake 형태로 보이는 구간이 있다. 타입명, 필드명, control flow, 영어 prompt의 핵심 정책은 읽을 수 있다.
+- 소스 파일의 한국어 문자열은 UTF-8 인코딩으로 정상 저장되어 있다. 다만 Windows 터미널이나 특정 코드 페이지 환경에서 출력할 때 한글이 mojibake 형태로 보일 수 있으므로, 시연 환경의 터미널 인코딩 설정(예: `chcp 65001`)을 미리 확인해야 한다.
 
 ## 25. 외부 설명용 짧은 요약
 

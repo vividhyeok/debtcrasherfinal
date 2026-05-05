@@ -19,13 +19,13 @@ Core principles:
 
 ## 1. What changes from the old design
 
-Old wording:
-- leverage_score
+Old wording (removed):
+- leverage_score (completely removed from codebase)
 - leverage_level
 - High / Mid / Low leverage
 - AI appears to score question importance
 
-Revised wording:
+Current wording:
 - human_review_level
 - review_categories
 - risk_categories
@@ -37,7 +37,7 @@ Revised wording:
 
 Do not describe the system in UI or docs as if AI can precisely score question importance.
 
-Keep `leverage_score` only if it is useful as an internal sorting field. In user-facing UI, `DECISIONS.md`, and tutorial documents, center `human_review_level` instead.
+`leverage_score` has been completely removed from the codebase. Sorting and derivation logic now uses only `human_review_level` and `risk_categories`.
 
 ## 2. Human Review Level definitions
 
@@ -233,7 +233,7 @@ Allow the user to override the review level in Strict mode.
 
 Use `human_review_level` and `review_categories` as the user-facing fields.
 
-Keep `leverage_score` only as an optional internal sorting aid if needed.
+`leverage_score` has been removed. Sorting is based on `human_review_level` and `topic` only.
 
 ```json
 {
@@ -459,7 +459,7 @@ Priority 3:
 Consider the change complete when:
 1. Planning responses include `human_review_level`
 2. Planning responses include `review_categories`
-3. `leverage_score` is demoted to an internal field or removed from user-facing docs/UI
+3. `leverage_score` is completely removed from codebase (DONE)
 4. Data loss, secret, public API, cost, and migration related questions are escalated to `REVIEW_REQUIRED`
 5. `question_sensitivity` exists
 6. Flow shows only `REVIEW_REQUIRED`
