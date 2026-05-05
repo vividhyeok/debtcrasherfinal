@@ -157,23 +157,13 @@ export type RiskCategory =
 
 ```ts
 function shouldAskQuestion(question: PlanningQuestion, sensitivity: QuestionSensitivity): boolean {
-  const level = normalizeHumanReviewLevel(question.human_review_level ?? deriveHumanReviewLevel(question));
-  if (sensitivity === 'strict') {
-    return true;
-  }
-  if (level === 'REVIEW_REQUIRED') {
-    return true;
-  }
-  if (level === 'AUTO_WITH_LOG') {
-    return false;
-  }
-  if (sensitivity === 'flow') {
-    return false;
-  }
-  if (sensitivity === 'balanced') {
-    return isPriorityRisk(question) || hasStrongReviewSignal(question);
-  }
-  return true;
+  const level = question.human_review_level ?? 'AUTO_WITH_LOG';
+  if (sensitivity === 'strict') return true;
+  if (level === 'REVIEW_REQUIRED') return true;
+  if (level === 'AUTO_WITH_LOG') return false;
+  if (sensitivity === 'flow') return false;
+  if (sensitivity === 'balanced') return isPriorityRisk(question) || hasStrongReviewSignal(question);
+  return true; // 'review' mode: show REVIEW_RECOMMENDED
 }
 ```
 
@@ -200,11 +190,7 @@ function comparePlanningQuestions(left: PlanningQuestion, right: PlanningQuestio
 }
 ```
 
-`leverage_score`는 제거된 필드가 아니라 내부 정렬 보조값으로 남아 있다. planning prompt에는 “user-facing requirement로 만들지 말라”는 규칙이 포함되어 있다.
-
-```ts
-'- `leverage_score` may be used only as an internal sorting aid; do not make it a user-facing requirement.'
-```
+`leverage_score`는 제거된 필드가 아니라 내부 정렬 보조값으로 남아 있다. planning prompt 스키마에서는 요구하지 않지만, AI 응답에 포함되면 정렬에 활용된다.
 
 ## 5. 질문 민감도 설정
 
@@ -1317,7 +1303,7 @@ Core principles:
 - workspace artifact는 로컬 파일 기반이다. 기본 구현에 backend, remote sync, database layer는 없다.
 - 자동 검증은 사용 가능한 script나 언어별 fallback이 있을 때만 실행된다.
 - repair는 검증 실패 후 한 번 시도하는 흐름으로 구현되어 있다.
-- 학습 자료 생성은 현재 `AIClient.generateTutorial()` 엔트리포인트 안에서 선택된 decision log를 근거 우선 markdown으로 재구성한 뒤 validator를 통과시키는 방식이다. 현재 경로는 시연 안정성과 과잉 추론 방지를 우선하며, validator는 section/근거/강한 표현 등을 검사하지만 문서 내용의 사실성을 완전히 증명하지 않는다.
+- 학습 자료 생성은 현재 `AIClient.generateTutorial()` 엔트리포인트 안에서 선택된 decision log를 AI API 호출 없이 template 기반으로 재구성한다. 선택 기록, 선택 근거, 검증 상태, 관련 파일을 결정 로그에서 그대로 가져와 보기 편한 형태로 정리하는 수준이며, AI가 내용을 추가하거나 성향을 해석하지 않는다. validator는 section/근거/강한 표현 등을 검사하지만 문서 내용의 사실성을 완전히 증명하지 않는다.
 - 현재 저장소의 일부 한국어 문자열은 소스 출력에서 mojibake 형태로 보이는 구간이 있다. 타입명, 필드명, control flow, 영어 prompt의 핵심 정책은 읽을 수 있다.
 
 ## 25. 외부 설명용 짧은 요약
