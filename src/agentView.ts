@@ -10,7 +10,7 @@ import {
   PlanningResponse
 } from './aiClient';
 import { WorkspaceContextService } from './context/WorkspaceContextService';
-import { DEMO_PLANNING_RESPONSE, DEMO_TASK, DEMO_TUTORIAL_MARKDOWN } from './demoSeed';
+import { DEMO_PLANNING_RESPONSE, DEMO_TASK } from './demoSeed';
 import { DecisionLogEntryInput, LogManager } from './logManager';
 import {
   AgentSessionChoice,
@@ -105,7 +105,8 @@ type AgentViewMessage =
   | NewSessionMessage
   | RunDemoSeedMessage
   | { type: 'openSettings' }
-  | { type: 'ready' };
+  | { type: 'ready' }
+  | { type: 'updateWorkspaceSetting'; key: string; value: string | boolean };
 
 interface PendingPlanningSession {
   task: string;
@@ -131,6 +132,8 @@ const WORKSPACE_SNAPSHOT_OPTIONS = {
   maxFileSize: 40_000,
   maxInlineCharacters: 5_000
 } as const;
+const DEMO_PLAN_DELAY_MS = 900;
+const DEMO_PROGRESS_DELAY_MS = 800;
 
 export class AgentViewController implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
@@ -150,8 +153,8 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     private readonly sessionHistoryService: SessionHistoryService
   ) {}
 
-  public show(): void {
-    this.view?.show(false);
+  public show(preserveFocus = false): void {
+    this.view?.show(preserveFocus);
   }
 
   public resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -248,6 +251,9 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       case 'resumeHistorySession':
         await this.handleResumeHistorySession(message);
         return;
+      case 'updateWorkspaceSetting':
+        await vscode.workspace.getConfiguration('debtcrasher').update(message.key, message.value, vscode.ConfigurationTarget.Global);
+        return;
       default:
         return;
     }
@@ -256,6 +262,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
   private async postBootstrapState(options: { restoreLatestToday: boolean; showRestoreBanner: boolean }): Promise<void> {
     const provider = await this.aiClient.getProviderSummary();
     const traceabilityMode = this.aiClient.getTraceabilityMode();
+    const demoMode = this.aiClient.getDemoMode();
     const sessionSummaries = await this.sessionHistoryService.listSessions();
     let restoredSession: PersistedAgentSession | undefined;
 
@@ -267,11 +274,15 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       this.currentSession = restoredSession;
     }
 
+    const questionSensitivity = await this.aiClient.getQuestionSensitivity();
+
     this.postMessage({
       type: 'workspaceState',
       hasWorkspace: Boolean(this.logManager.getWorkspaceRootUri()),
       provider,
       traceabilityMode,
+      demoMode,
+      questionSensitivity,
       sessionSummaries,
       restoredSession: restoredSession ? serializePersistedSession(restoredSession) : undefined,
       restoredBanner: Boolean(restoredSession && options.showRestoreBanner)
@@ -281,12 +292,16 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
   private async postWorkspaceState(): Promise<void> {
     const provider = await this.aiClient.getProviderSummary();
     const traceabilityMode = this.aiClient.getTraceabilityMode();
+    const demoMode = this.aiClient.getDemoMode();
+    const questionSensitivity = await this.aiClient.getQuestionSensitivity();
 
     this.postMessage({
       type: 'workspaceState',
       hasWorkspace: Boolean(this.logManager.getWorkspaceRootUri()),
       provider,
       traceabilityMode,
+      demoMode,
+      questionSensitivity,
       sessionSummaries: await this.sessionHistoryService.listSessions()
     });
   }
@@ -322,7 +337,16 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
   }
 
   private async handleRunDemoSeed(): Promise<void> {
+    if (!this.aiClient.getDemoMode()) {
+      this.postError('데모 모드를 먼저 켜 주세요.');
+      return;
+    }
+
     const requestId = `demo-${Date.now().toString()}`;
+    await this.startDemoSeed(requestId);
+  }
+
+  private async startDemoSeed(requestId: string): Promise<void> {
     const plan = {
       ...DEMO_PLANNING_RESPONSE,
       questions: DEMO_PLANNING_RESPONSE.questions.map((question) => ({
@@ -356,10 +380,11 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     this.sessions.set(requestId, {
       task: DEMO_TASK,
       plan,
-      workspaceContext: 'DEMO MODE: 실제 workspace 파일을 읽거나 수정하지 않습니다.'
+      workspaceContext: 'DEMO MODE: 제품 구현 파일은 읽거나 수정하지 않고, 데모 산출물만 생성합니다.'
     });
     this.demoRequestIds.add(requestId);
-    this.postPhaseUpdate(requestId, 'DEMO MODE: 실제 파일 변경 없이 Planning Gate → Decision Log → Validation → 학습 자료 생성 흐름을 보여줍니다.', 'planning');
+    this.postPhaseUpdate(requestId, 'DEMO MODE: Planning Gate → Decision Log → markdown → HTML TODO 앱 결과물 흐름을 보여줍니다.', 'planning');
+    await sleep(DEMO_PLAN_DELAY_MS);
     this.postMessage({ type: 'planningResponse', requestId, plan, demoMode: true });
   }
 
@@ -367,6 +392,11 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     const task = message.task.trim();
     if (!task) {
       this.postError('질문이나 작업 요청을 입력해 주세요.', message.requestId);
+      return;
+    }
+
+    if (this.aiClient.getDemoMode()) {
+      await this.startDemoSeed(message.requestId);
       return;
     }
 
@@ -475,7 +505,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       if (this.demoRequestIds.has(message.requestId)) {
         this.sessions.delete(message.requestId);
         this.demoRequestIds.delete(message.requestId);
-        await this.finishDemoTask(message.requestId, resolved.history);
+        await this.finishDemoTask(message.requestId, session.task, resolved.history, resolved.logEntries);
         return;
       }
       this.postPhaseUpdate(
@@ -518,73 +548,50 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     await this.updatePlanningMessageChoices(message.requestId, buildSessionChoices(session.plan.questions, message.answers));
   }
 
-  private async finishDemoTask(requestId: string, history: DecisionHistoryEntry[]): Promise<void> {
-    this.postPhaseUpdate(requestId, 'DEMO MODE: DECISIONS.md preview와 검증 결과를 표시합니다. 실제 파일은 쓰지 않습니다.', 'verification');
-    this.postProgress(requestId, 'log_done');
-    this.postProgress(requestId, 'verify_done', {
-      passed: true,
-      output: 'demo validation seed'
-    });
+  private async finishDemoTask(
+    requestId: string,
+    task: string,
+    history: DecisionHistoryEntry[],
+    logEntries: DecisionLogEntryInput[]
+  ): Promise<void> {
+    this.postPhaseUpdate(
+      requestId,
+      'DEMO MODE: 선택한 판단을 DECISIONS.md에 기록하고 Step View를 갱신합니다. 구현 파일은 변경하지 않습니다.',
+      'implementation'
+    );
+    await sleep(DEMO_PROGRESS_DELAY_MS);
+    await this.logManager.appendDecisions(logEntries);
+    this.postProgress(requestId, 'log_done', { output: 'demo log written' });
+    await sleep(DEMO_PROGRESS_DELAY_MS);
+    await this.logManager.syncProjectGuide(task, 'DEMO MODE: 웹 TODO 앱 결정 기록 완료. Step View에서 선택한 step을 markdown과 HTML preview로 생성함.');
+    this.postProgress(requestId, 'agent_updated');
+    await sleep(DEMO_PROGRESS_DELAY_MS);
+    await vscode.commands.executeCommand('debtcrasher.openStepView');
+    this.postPhaseUpdate(
+      requestId,
+      'DEMO MODE: Step View에서 방금 기록된 steps를 체크한 뒤 notebook 버튼으로 markdown을 생성하세요. markdown 생성 후 HTML preview가 열립니다.',
+      'verification'
+    );
+    await sleep(DEMO_PROGRESS_DELAY_MS);
 
-    const verificationResults = [
-      {
-        label: 'typecheck',
-        command: 'npm run typecheck',
-        available: true,
-        ok: true,
-        timedOut: false,
-        exitCode: 0,
-        output: 'demo seed: typecheck passed',
-        status: 'passed' as const
-      },
-      {
-        label: 'build',
-        command: 'npm run build',
-        available: false,
-        ok: false,
-        timedOut: false,
-        exitCode: null,
-        output: 'not available',
-        status: 'not_available' as const
-      },
-      {
-        label: 'test',
-        command: 'npm test',
-        available: false,
-        ok: false,
-        timedOut: false,
-        exitCode: null,
-        output: 'not available',
-        status: 'not_available' as const
-      },
-      {
-        label: 'lint',
-        command: 'npm run lint',
-        available: false,
-        ok: false,
-        timedOut: false,
-        exitCode: null,
-        output: 'not available',
-        status: 'not_available' as const
-      }
-    ];
     const responsePayload = {
       type: 'implementationResponse',
       requestId,
-      currentWork: 'DEMO MODE: TODO 저장 기능 sample flow',
-      summary: `실제 파일 변경 없이 ${history.length}개 demo 결정을 기준으로 Decision Log, Validation, 학습 자료 생성 흐름을 표시했습니다.`,
+      demoMode: true,
+      currentWork: 'DEMO MODE: Step View handoff',
+      summary: `제품 구현 파일 변경 없이 ${history.length}개 demo 결정을 기록했습니다. 이제 Step View에서 원하는 step을 체크해서 markdown 정리본과 HTML preview를 생성합니다.`,
       files: [
-        { path: 'DECISIONS.md (demo preview, not written)', description: '구조화된 decision entry preview' },
-        { path: 'src/storage/todoStorage.ts (demo preview, not written)', description: '관련 구현 파일 예시' },
-        { path: '.ai-tutorials/todo-storage-demo.md (demo preview, not written)', description: '학습 자료 seed markdown 예시' }
+        { path: 'DECISIONS.md', description: '구조화된 demo decision entries' },
+        { path: 'AGENT.md', description: 'demo decision cache update' }
       ],
       runInstructions: [
-        'DEMO MODE: 실제 파일 생성/수정은 수행하지 않았습니다.',
-        `Bundled learning-material seed length: ${DEMO_TUTORIAL_MARKDOWN.length} characters`
+        'DEMO MODE: 구현 파일은 생성/수정하지 않습니다.',
+        'Step View에서 방금 생성된 step을 체크합니다.',
+        'notebook 버튼을 누르면 선택된 step 기반 markdown이 생성되고, demo HTML preview가 이어서 열립니다.'
       ],
-      guidePath: 'DECISIONS.md / AGENT.md (demo preview, not written)',
-      verificationSummary: 'demo validation seed: typecheck passed, build/test/lint not available.',
-      verificationResults: serializeVerificationResults(verificationResults),
+      guidePath: 'DECISIONS.md / AGENT.md',
+      verificationSummary: 'demo handoff ready: Step View에서 markdown과 HTML preview를 수동 생성합니다.',
+      verificationResults: [],
       autoRepairApplied: false,
       repairFailureMessage: '',
       manualVerificationAvailable: false
@@ -1135,6 +1142,25 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       </div>
     </header>
 
+    <div class="settings-bar" id="inlineSettingsBar">
+      <div class="settings-group">
+        <label for="sensitivitySelect" title="얼마나 많은 질문을 물어볼지 결정합니다.">민감도</label>
+        <select id="sensitivitySelect" class="inline-select">
+          <option value="flow">Flow</option>
+          <option value="balanced">Balanced</option>
+          <option value="review">Review</option>
+          <option value="strict">Strict</option>
+        </select>
+      </div>
+      <div class="settings-group">
+        <label for="traceabilitySelect" title="엄격한 형식을 요구할지 결정합니다.">추적 모드</label>
+        <select id="traceabilitySelect" class="inline-select">
+          <option value="basic">Basic</option>
+          <option value="strict">Strict</option>
+        </select>
+      </div>
+    </div>
+
     <div id="restoreBanner" class="restore-banner is-hidden" aria-live="polite">이전 세션을 불러왔습니다.</div>
 
     <section id="chatPane" class="pane pane-chat">
@@ -1173,6 +1199,8 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     const historyPane = document.getElementById('historyPane');
     const historyList = document.getElementById('historyList');
     const historyDetail = document.getElementById('historyDetail');
+    const sensitivitySelect = document.getElementById('sensitivitySelect');
+    const traceabilitySelect = document.getElementById('traceabilitySelect');
     const PHASES = ['planning', 'decision', 'implementation', 'verification', 'complete'];
     const PHASE_LABELS = {
       planning: '판단 분석 중',
@@ -1185,6 +1213,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
     const state = {
       provider: null,
       traceabilityMode: 'basic',
+      demoMode: false,
       hasWorkspace: false,
       activeRequestId: '',
       activePhase: '',
@@ -1258,11 +1287,12 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       scrollToBottom(thread);
     }
 
-    function updateEnvironmentMeta(provider, hasWorkspace, traceabilityMode) {
+    function updateEnvironmentMeta(provider, hasWorkspace, traceabilityMode, demoMode) {
       if (!provider) return;
       const modeLabel = traceabilityMode === 'strict' ? 'Strict' : 'Basic';
       const keyLabel = provider.hasApiKey ? '키 설정됨' : '키 필요';
-      environmentMeta.textContent = provider.displayName + ' ' + provider.model + ' · ' + keyLabel + ' · 워크스페이스 ' + (hasWorkspace ? '연결됨' : '없음') + ' · ' + modeLabel;
+      const demoLabel = demoMode ? ' · Demo' : '';
+      environmentMeta.textContent = provider.displayName + ' ' + provider.model + ' · ' + keyLabel + ' · 워크스페이스 ' + (hasWorkspace ? '연결됨' : '없음') + ' · ' + modeLabel + demoLabel;
     }
 
     function setPhase(requestId, phase) {
@@ -1368,6 +1398,9 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
         return '자동 수정 중...';
       }
       if (message.event === 'log_done') {
+        if (message.output === 'demo preview') {
+          return 'DECISIONS.md preview 표시';
+        }
         return 'DECISIONS.md 기록 완료';
       }
       if (message.event === 'agent_updated') {
@@ -1388,6 +1421,20 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       return 'info';
     }
 
+    function getProgressTone(message) {
+      if (message.event === 'verify_done') {
+        if (message.output === 'not available') return 'is-muted';
+        return message.passed ? 'is-complete' : 'is-error';
+      }
+      if (message.event === 'file_done' || message.event === 'log_done' || message.event === 'agent_updated') {
+        return 'is-complete';
+      }
+      if (message.event === 'file_edit') {
+        return 'is-edited';
+      }
+      return 'is-active';
+    }
+
     function appendProgressBubble(message) {
       const requestId = message.requestId || 'default';
       const text = getProgressText(message);
@@ -1404,7 +1451,10 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       // Remove active state from previous nodes in the same group
       group.nodes.forEach((node) => {
         const bubble = node.querySelector('.progress-bubble');
-        if (bubble) bubble.classList.remove('is-active');
+        if (bubble) {
+          bubble.classList.remove('is-active');
+          bubble.classList.add('is-complete');
+        }
         // Stop spinning for previous nodes if they were stuck
         const icon = node.querySelector('.codicon-loading');
         if (icon) {
@@ -1416,19 +1466,26 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
         event: message.event,
         text: text,
         filename: message.filename || '',
-        passed: typeof message.passed === 'boolean' ? message.passed : null
+        passed: typeof message.passed === 'boolean' ? message.passed : null,
+        output: message.output || ''
       });
 
       const article = document.createElement('article');
       article.className = 'message message-assistant progress-message';
       article.setAttribute('data-progress-request-id', requestId);
-      article.innerHTML = '<div class="bubble progress-bubble is-active"><p>' + codicon(getProgressCodicon(message)) + '<span>' + escapeHtml(text) + '</span></p></div>';
+      article.setAttribute('data-progress-event', message.event || '');
+      article.innerHTML = '<div class="bubble progress-bubble ' + getProgressTone(message) + '"><p><span class="progress-glyph">' + codicon(getProgressCodicon(message)) + '</span><span class="progress-copy">' + escapeHtml(text) + '</span></p></div>';
       thread.appendChild(article);
       group.nodes.push(article);
       scrollToBottom(thread);
     }
 
     function buildProgressSummaryText(group, resultMessage) {
+      if (resultMessage?.demoMode) {
+        const verificationPassed = group.items.filter((item) => item.event === 'verify_done').slice(-1)[0]?.passed === true;
+        return 'Demo flow · ' + (verificationPassed ? '검증 통과' : '검증 없음') + ' · ' + formatDuration(Date.now() - group.startedAt);
+      }
+
       const fileNames = new Set(
         group.items
           .filter((item) => item.event === 'file_start' || item.event === 'file_done' || item.event === 'file_edit')
@@ -1466,7 +1523,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       details.innerHTML = [
         '<summary class="progress-summary-toggle">' + codicon('checklist') + '<span>' + escapeHtml(buildProgressSummaryText(group, resultMessage)) + '</span></summary>',
         '<div class="progress-summary-list">',
-        group.items.map((item) => '<div class="progress-summary-item">' + codicon(getProgressCodicon(item)) + '<span>' + escapeHtml(item.text) + '</span></div>').join(''),
+        group.items.map((item) => '<div class="progress-summary-item ' + getProgressTone(item) + '"><span class="progress-summary-glyph">' + codicon(getProgressCodicon(item)) + '</span><span>' + escapeHtml(item.text) + '</span></div>').join(''),
         '</div>'
       ].join('');
 
@@ -1689,7 +1746,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       return parts.length > 0 ? parts.join(' · ') : '검토 질문 ' + q.length + '개';
     }
 
-    function appendPlanningCard(requestId, plan) {
+    function appendPlanningCard(requestId, plan, demoMode) {
       setMode('chat');
       setPhase(requestId, 'decision');
 
@@ -1752,7 +1809,9 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
             if (!questionId) return;
             answers.set(questionId, { questionId, choiceType: button.dataset.choiceType });
             optionButtons.forEach((item) => item.classList.remove('is-selected'));
+            card.querySelectorAll('.option-card').forEach((item) => item.classList.remove('is-selected-card'));
             button.classList.add('is-selected');
+            button.closest('.option-card')?.classList.add('is-selected-card');
             if (customInput) customInput.value = '';
             syncStartButton();
             emitPlanningAnswers();
@@ -1771,10 +1830,13 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
 
           answers.set(questionId, { questionId, choiceType: 'custom', customChoice });
           optionButtons.forEach((item) => item.classList.remove('is-selected'));
+          card.querySelectorAll('.option-card').forEach((item) => item.classList.remove('is-selected-card'));
           syncStartButton();
           emitPlanningAnswers();
         });
       });
+
+      syncStartButton();
 
       startButton.addEventListener('click', () => {
         const payloadAnswers = (plan.questions || [])
@@ -2040,11 +2102,19 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       vscode.postMessage({ type: 'openSettings' });
     });
 
+    sensitivitySelect.addEventListener('change', (event) => {
+      vscode.postMessage({ type: 'updateWorkspaceSetting', key: 'questionSensitivity', value: event.target.value });
+    });
+
+    traceabilitySelect.addEventListener('change', (event) => {
+      vscode.postMessage({ type: 'updateWorkspaceSetting', key: 'traceabilityMode', value: event.target.value });
+    });
+
     demoSeedBtn.addEventListener('click', () => {
       setMode('chat');
       setRestoreBanner(false);
       clearPhaseIndicator();
-      resetChatThread('DEMO MODE: TODO 저장 기능 sample flow를 시작합니다. 실제 파일 변경은 수행하지 않습니다.');
+      resetChatThread('DEMO MODE: 웹 TODO 앱 데모 흐름을 시작합니다. 제품 구현 파일은 변경하지 않습니다.');
       vscode.postMessage({ type: 'runDemoSeed' });
     });
 
@@ -2055,7 +2125,20 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
         state.provider = message.provider;
         state.hasWorkspace = Boolean(message.hasWorkspace);
         state.traceabilityMode = message.traceabilityMode || 'basic';
-        updateEnvironmentMeta(state.provider, state.hasWorkspace, state.traceabilityMode);
+        state.demoMode = Boolean(message.demoMode);
+        state.questionSensitivity = message.questionSensitivity || 'balanced';
+        updateEnvironmentMeta(state.provider, state.hasWorkspace, state.traceabilityMode, state.demoMode);
+
+        if (sensitivitySelect && state.questionSensitivity) {
+          sensitivitySelect.value = state.questionSensitivity;
+        }
+        if (traceabilitySelect && state.traceabilityMode) {
+          traceabilitySelect.value = state.traceabilityMode;
+        }
+        if (demoSeedBtn) {
+          demoSeedBtn.hidden = !state.demoMode;
+        }
+
         state.sessionSummaries = Array.isArray(message.sessionSummaries) ? message.sessionSummaries : state.sessionSummaries;
         renderSessionList();
         if (message.restoredSession) {
@@ -2097,7 +2180,7 @@ export class AgentViewController implements vscode.WebviewViewProvider, vscode.D
       }
 
       if (message.type === 'planningResponse') {
-        appendPlanningCard(message.requestId, message.plan);
+        appendPlanningCard(message.requestId, message.plan, Boolean(message.demoMode));
         return;
       }
 
@@ -2465,6 +2548,10 @@ function sanitizeDecisionTitle(title: string): string {
 
 function padNumber(value: number): string {
   return String(value).padStart(2, '0');
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function serializePersistedSession(session: PersistedAgentSession): PersistedAgentSession {

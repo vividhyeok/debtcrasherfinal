@@ -85,7 +85,17 @@ interface GeminiApiResponse {
   promptFeedback?: { blockReason?: string };
 }
 interface OpenAICompatibleResponse {
-  choices?: Array<{ message?: { content?: string | Array<{ text?: string | { value?: string }; value?: string }>; refusal?: string } }>;
+  choices?: Array<{
+    finish_reason?: string;
+    message?: { content?: string | Array<{ text?: string | { value?: string }; value?: string }>; refusal?: string }
+  }>;
+  error?: { message?: string };
+}
+interface OpenAIResponsesResponse {
+  output_text?: string;
+  output?: Array<{ type?: string; content?: Array<{ type?: string; text?: string; value?: string }> }>;
+  status?: string;
+  incomplete_details?: { reason?: string };
   error?: { message?: string };
 }
 
@@ -382,6 +392,10 @@ export class AIClient {
     return isTraceabilityMode(configured) ? configured : 'basic';
   }
 
+  public getDemoMode(): boolean {
+    return this.getConfiguration().get<boolean>('demoMode', false);
+  }
+
   public async saveCurrentModel(model: string): Promise<{ id: AIProvider; displayName: string; model: string; modelOptions: string[] }> {
     const provider = this.getProvider();
     const normalizedModel = model.trim() || this.getModel(provider);
@@ -442,7 +456,7 @@ export class AIClient {
     switch (provider) {
       case 'anthropic': return this.sendAnthropicMessage(system, userPrompt, maxTokens, apiKeyState.value, model, abortSignal);
       case 'google': return this.sendGeminiMessage(system, userPrompt, maxTokens, apiKeyState.value, model, abortSignal);
-      case 'openai': return this.sendOpenAICompatibleMessage('https://api.openai.com/v1/chat/completions', system, userPrompt, apiKeyState.value, model, maxTokens, 'OpenAI', abortSignal);
+      case 'openai': return this.sendOpenAIResponsesMessage(system, userPrompt, apiKeyState.value, model, maxTokens, abortSignal);
       case 'deepseek': return this.sendOpenAICompatibleMessage('https://api.deepseek.com/chat/completions', system, userPrompt, apiKeyState.value, model, maxTokens, 'DeepSeek', abortSignal);
       default: throw new Error('지원하지 않는 AI 제공자입니다.');
     }
@@ -504,6 +518,48 @@ export class AIClient {
     return text;
   }
 
+  private async sendOpenAIResponsesMessage(
+    system: string,
+    userPrompt: string,
+    apiKey: string,
+    model: string,
+    maxTokens: number,
+    abortSignal?: AbortSignal
+  ): Promise<string> {
+    const body: Record<string, unknown> = {
+      model,
+      instructions: system,
+      input: userPrompt,
+      max_output_tokens: maxTokens,
+      store: false
+    };
+
+    if (isOpenAIReasoningModel(model)) {
+      body.reasoning = { effort: 'low' };
+    }
+
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+      signal: abortSignal
+    });
+    const rawText = await response.text();
+    const parsed = safeParseJson(rawText) as OpenAIResponsesResponse | undefined;
+    if (!response.ok) {
+      throw new Error(`OpenAI API 요청이 실패했습니다: ${parsed?.error?.message ?? rawText}`);
+    }
+
+    const text = extractOpenAIResponsesText(parsed);
+    if (!text) {
+      const reason = parsed?.incomplete_details?.reason || parsed?.status;
+      throw new Error(reason
+        ? `OpenAI API 응답에서 텍스트 콘텐츠를 찾을 수 없습니다. 응답 상태: ${reason}`
+        : 'OpenAI API 응답에서 텍스트 콘텐츠를 찾을 수 없습니다.');
+    }
+    return text;
+  }
+
   private async sendOpenAICompatibleMessage(
     endpoint: string,
     system: string,
@@ -514,10 +570,15 @@ export class AIClient {
     providerName: string,
     abortSignal?: AbortSignal
   ): Promise<string> {
+    const tokenLimitParameter = getOpenAICompatibleTokenLimitParameter(providerName, model);
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'content-type': 'application/json', Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ model, max_tokens: maxTokens, messages: [{ role: 'system', content: system }, { role: 'user', content: userPrompt }] }),
+      body: JSON.stringify({
+        model,
+        [tokenLimitParameter]: maxTokens,
+        messages: [{ role: 'system', content: system }, { role: 'user', content: userPrompt }]
+      }),
       signal: abortSignal
     });
     const rawText = await response.text();
@@ -527,6 +588,19 @@ export class AIClient {
     if (!text) throw new Error(parsed?.choices?.[0]?.message?.refusal ? `${providerName} 응답이 거절되었습니다: ${parsed.choices[0].message?.refusal}` : `${providerName} API 응답에서 텍스트 콘텐츠를 찾을 수 없습니다.`);
     return text;
   }
+}
+
+function getOpenAICompatibleTokenLimitParameter(providerName: string, model: string): 'max_tokens' | 'max_completion_tokens' {
+  if (providerName !== 'OpenAI') {
+    return 'max_tokens';
+  }
+
+  const normalizedModel = model.trim().toLowerCase();
+  return normalizedModel.startsWith('gpt-5') ? 'max_completion_tokens' : 'max_tokens';
+}
+
+function isOpenAIReasoningModel(model: string): boolean {
+  return model.trim().toLowerCase().startsWith('gpt-5');
 }
 
 function buildPlanningUserPrompt(
@@ -576,6 +650,23 @@ function extractOpenAICompatibleText(response: OpenAICompatibleResponse | undefi
     if (typeof part.value === 'string') return part.value.trim();
     return '';
   }).filter(Boolean).join('\n').trim();
+}
+
+function extractOpenAIResponsesText(response: OpenAIResponsesResponse | undefined): string {
+  if (typeof response?.output_text === 'string' && response.output_text.trim()) {
+    return response.output_text.trim();
+  }
+
+  return (response?.output ?? [])
+    .flatMap((item) => item.content ?? [])
+    .map((part) => {
+      if (typeof part.text === 'string') return part.text.trim();
+      if (typeof part.value === 'string') return part.value.trim();
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n')
+    .trim();
 }
 
 function safeParseJson(rawText: string): unknown {
@@ -1311,4 +1402,3 @@ function hasOverlap(left: string[] | undefined, right: string[] | undefined): bo
     .map((value) => compactLine(value).toLowerCase())
     .some((value) => leftSet.has(value));
 }
-

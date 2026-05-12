@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 
 import { AIClient } from './aiClient';
+import { DEMO_HTML_DOCUMENT, DEMO_HTML_PATH } from './demoSeed';
 import { LogManager } from './logManager';
 import { validateTutorialMarkdown } from './tutorialValidator';
 
@@ -10,6 +11,9 @@ type StepViewMessage =
   | { type: 'generateTutorial'; entryIds: string[] }
   | { type: 'openSavedTutorial'; uri: string }
   | { type: 'openSettings' };
+
+const textEncoder = new TextEncoder();
+const DEMO_STEP_DELAY_MS = 750;
 
 export class StepViewController implements vscode.WebviewViewProvider, vscode.Disposable {
   private view: vscode.WebviewView | undefined;
@@ -166,6 +170,11 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
         throw new Error('선택한 step을 찾지 못했습니다.');
       }
 
+      const shouldPresentDemoHtml = this.shouldPresentDemoHtml(selectedEntries);
+      if (shouldPresentDemoHtml) {
+        await sleep(DEMO_STEP_DELAY_MS);
+      }
+
       const [projectGuideContent, lastImplementationSummary] = await Promise.all([
         this.logManager.readAgentGuideContent(),
         this.logManager.readLatestImplementationSummary()
@@ -183,6 +192,10 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
       const title = buildTutorialTitle(selectedEntries);
       const tutorialUri = await this.logManager.saveTutorial(title, markdown);
 
+      if (shouldPresentDemoHtml) {
+        await sleep(DEMO_STEP_DELAY_MS);
+      }
+
       await this.refreshState();
       await this.openMarkdownDocument(tutorialUri);
 
@@ -194,6 +207,7 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
         validation: report,
         traceabilityMode
       });
+      await this.presentDemoHtmlIfNeeded(selectedEntries);
     } catch (error) {
       this.postError(toErrorMessage(error));
     }
@@ -210,9 +224,64 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
   private async openMarkdownDocument(uri: vscode.Uri): Promise<void> {
     const document = await vscode.workspace.openTextDocument(uri);
     await vscode.window.showTextDocument(document, {
+      viewColumn: vscode.ViewColumn.One,
       preview: false,
       preserveFocus: false
     });
+  }
+
+  private shouldPresentDemoHtml(entries: Array<{ relatedFiles?: string[] }>): boolean {
+    return this.aiClient.getDemoMode() && entries.some((entry) => entry.relatedFiles?.includes(DEMO_HTML_PATH));
+  }
+
+  private async presentDemoHtmlIfNeeded(entries: Array<{ relatedFiles?: string[] }>): Promise<void> {
+    if (!this.shouldPresentDemoHtml(entries)) {
+      return;
+    }
+
+    await sleep(DEMO_STEP_DELAY_MS);
+    const htmlUri = await this.writeDemoHtmlArtifact();
+    this.postMessage({
+      type: 'demoHtmlGenerated',
+      uri: htmlUri.toString(),
+      path: DEMO_HTML_PATH
+    });
+    await sleep(DEMO_STEP_DELAY_MS);
+
+    const panel = vscode.window.createWebviewPanel(
+      'debtcrasher.demoTodoHtml',
+      'Demo TODO App',
+      {
+        viewColumn: vscode.ViewColumn.Two,
+        preserveFocus: false
+      },
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true
+      }
+    );
+    panel.webview.html = DEMO_HTML_DOCUMENT;
+  }
+
+  private async writeDemoHtmlArtifact(): Promise<vscode.Uri> {
+    const workspaceRoot = this.logManager.getWorkspaceRootUri();
+    if (!workspaceRoot) {
+      throw new Error('워크스페이스 폴더가 열려 있어야 demo HTML 결과물을 생성할 수 있습니다.');
+    }
+
+    const segments = DEMO_HTML_PATH.split('/');
+    const fileName = segments.pop();
+    if (!fileName) {
+      throw new Error(`잘못된 demo HTML 경로입니다: ${DEMO_HTML_PATH}`);
+    }
+
+    if (segments.length > 0) {
+      await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(workspaceRoot, ...segments));
+    }
+
+    const htmlUri = vscode.Uri.joinPath(workspaceRoot, ...segments, fileName);
+    await vscode.workspace.fs.writeFile(htmlUri, textEncoder.encode(DEMO_HTML_DOCUMENT));
+    return htmlUri;
   }
 
   private postError(message: string): void {
@@ -623,6 +692,11 @@ export class StepViewController implements vscode.WebviewViewProvider, vscode.Di
         return;
       }
 
+      if (message.type === 'demoHtmlGenerated') {
+        showStatus('demo HTML preview 생성 · ' + (message.path || 'HTML'));
+        return;
+      }
+
       if (message.type === 'error') {
         state.isGenerating = false;
         updateButtons();
@@ -644,6 +718,10 @@ function buildTutorialTitle(entries: Array<{ title: string }>): string {
   }
 
   return `${entries[0].title} 외 ${entries.length - 1}개 선택 기록 분석`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function createNonce(): string {

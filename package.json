@@ -103,6 +103,11 @@
           ],
           "markdownDescription": "Mode: Basic / Strict. Strict mode adds extra traceability checks and evidence labeling requirements."
         },
+        "debtcrasher.demoMode": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "데모 모드를 켭니다. API 호출과 제품 구현 파일 변경 없이 준비된 웹 TODO 앱 시나리오를 실행하고 DECISIONS.md/AGENT.md, markdown, HTML 결과물 흐름을 확인할 수 있습니다."
+        },
         "debtcrasher.anthropicApiKey": {
           "type": "string",
           "default": "",

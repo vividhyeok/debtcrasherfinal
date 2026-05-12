@@ -1289,7 +1289,6 @@ Core principles:
 
 - `human_review_level` 분류는 AI planning 응답과 코드의 정규화/필터링에 의존한다. 코드 어디에도 이 분류가 객관적 ground truth라고 정의되어 있지 않다.
 - `leverage_score`는 코드베이스에서 완전히 제거되었다. 정렬과 파생 로직은 `human_review_level`과 `risk_categories`만을 사용한다.
-- `questionSensitivity`와 `traceabilityMode`는 VS Code settings로 제공된다. Agent View 안에서 별도 sensitivity selector UI가 구현되어 있지는 않다.
 - `.github/agents/debtcrasher-development.agent.md`에는 Strict mode에서 review level override control을 언급하지만, 현재 Agent View 코드에는 사용자가 review level 자체를 override하는 별도 control이 보이지 않는다. 사용자는 option 선택 또는 custom choice 입력은 할 수 있다.
 - Step View는 markdown을 inline preview하지 않고 VS Code editor로 연다.
 - workspace artifact는 로컬 파일 기반이다. 기본 구현에 backend, remote sync, database layer는 없다.

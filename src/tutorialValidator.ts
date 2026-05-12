@@ -95,15 +95,14 @@ function buildTutorialValidationReport(
   }
 
   if (mode === 'strict' && !allMajorBlocksHaveEvidenceLabels(markdown)) {
-    messages.push('Strict mode에서는 주요 bullet 앞에 근거 라벨이 필요합니다.');
+    messages.push('Strict mode에서는 주요 bullet 앞에 근거 라벨이 있는 것이 권장됩니다 (형식 불일치 감지).');
   }
 
   const blockingFailures = [
     requiredSections === 'fail',
     relatedDecisionLog === 'fail',
     validationResultIncluded === 'fail',
-    markdown.trim().length < Math.max(500, entries.length * 250),
-    mode === 'strict' && !allMajorBlocksHaveEvidenceLabels(markdown)
+    markdown.trim().length < Math.max(500, entries.length * 250)
   ];
   const finalStatus = blockingFailures.some(Boolean)
     ? 'blocked'

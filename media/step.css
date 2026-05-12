@@ -6,13 +6,15 @@
   --bg: var(--vscode-sideBar-background);
   --panel: var(--vscode-editorWidget-background);
   --panel-strong: var(--vscode-sideBarSectionHeader-background);
+  --panel-soft: color-mix(in srgb, var(--vscode-editorWidget-background) 86%, transparent);
+  --hover: var(--vscode-toolbar-hoverBackground, rgba(90,93,94,0.31));
   --stroke: var(--vscode-panel-border, rgba(128,128,128,0.35));
   --text: var(--vscode-foreground);
   --muted: var(--vscode-descriptionForeground);
   --accent: var(--vscode-textLink-foreground);
   --accent-soft: color-mix(in srgb, var(--accent) 10%, transparent);
   --danger: var(--vscode-errorForeground, #f48771);
-  --radius: 3px;
+  --radius: 4px;
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size);
   line-height: 1.4;
@@ -58,9 +60,10 @@ body.is-resizing {
   justify-content: space-between;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
+  min-height: 34px;
+  padding: 5px 8px;
   border-bottom: 1px solid var(--stroke);
-  background: var(--panel-strong);
+  background: color-mix(in srgb, var(--bg) 88%, var(--panel-strong));
 }
 
 .toolbar-copy {
@@ -126,7 +129,7 @@ body.is-resizing {
 }
 
 .icon-button:hover {
-  background: var(--vscode-toolbar-hoverBackground, rgba(90,93,94,0.31));
+  background: var(--hover);
   color: var(--text);
 }
 
@@ -231,16 +234,20 @@ body.is-resizing {
 
 .status-banner {
   margin: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--stroke));
   border-left: 2px solid var(--accent);
+  border-radius: var(--radius);
   color: var(--text);
-  background: transparent;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
 
 .error-banner {
   margin: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--stroke));
   border-left: 2px solid var(--danger);
+  border-radius: var(--radius);
   color: var(--danger);
-  background: transparent;
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
 }
 
 .hidden {
@@ -282,7 +289,7 @@ body.is-resizing {
   gap: 8px;
   padding: 4px 8px;
   border-bottom: 1px solid var(--stroke);
-  background: var(--panel-strong);
+  background: color-mix(in srgb, var(--bg) 88%, var(--panel-strong));
 }
 
 .resize-handle {
@@ -314,7 +321,11 @@ body.is-resizing {
   flex: 0 0 4px;
   height: 4px;
   cursor: row-resize;
-  background: var(--stroke);
+  background: color-mix(in srgb, var(--stroke) 64%, transparent);
+}
+
+.split-divider:hover {
+  background: color-mix(in srgb, var(--accent) 34%, var(--stroke));
 }
 
 /* ── Step / History Lists ── */
@@ -348,7 +359,7 @@ body.is-resizing {
 
 .step-item:hover,
 .history-item:hover {
-  background: var(--vscode-list-hoverBackground, rgba(90,93,94,0.31));
+  background: var(--vscode-list-hoverBackground, var(--hover));
 }
 
 .step-item input {
